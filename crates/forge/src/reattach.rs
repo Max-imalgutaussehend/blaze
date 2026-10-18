@@ -6,7 +6,7 @@
 //! The result is verified (code tokens unchanged, comments identical and in order);
 //! if anything is off we return `None` and the caller leaves the file untouched.
 
-use blaze_core::lexer::{Kind, Token, lex};
+use blaze_lexer::{Kind, Token, lex};
 
 fn is_comment(k: Kind) -> bool {
     k == Kind::Comment

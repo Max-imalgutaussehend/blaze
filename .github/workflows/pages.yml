@@ -14,9 +14,19 @@ jobs:
       url: ${{ steps.d.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - run: python3 docs/build.py
+      - name: Build ember + forge as WebAssembly (playground)
+        run: site/scripts/build-wasm.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+        working-directory: site
+      - run: npm run build
+        working-directory: site
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/_site
+          path: site/dist
       - id: d
         uses: actions/deploy-pages@v4

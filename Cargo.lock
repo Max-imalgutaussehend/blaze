@@ -105,6 +105,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "blake3",
+ "blaze-lexer",
  "ignore",
  "serde",
  "serde_json",
@@ -115,7 +116,7 @@ dependencies = [
 name = "blaze-ember"
 version = "0.2.0"
 dependencies = [
- "blaze-core",
+ "blaze-lexer",
  "rayon",
 ]
 
@@ -125,10 +126,15 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "blaze-core",
+ "blaze-lexer",
  "prettyplease",
  "rayon",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "blaze-lexer"
+version = "0.2.0"
 
 [[package]]
 name = "blaze-spark"
@@ -150,6 +156,14 @@ dependencies = [
  "serde",
  "serde_json",
  "toml",
+]
+
+[[package]]
+name = "blaze-wasm"
+version = "0.2.0"
+dependencies = [
+ "blaze-ember",
+ "blaze-forge",
 ]
 
 [[package]]

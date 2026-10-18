@@ -1,11 +1,11 @@
 //! Ember: token-level Rust linter. No syntax tree is built; every rule is a pattern over
-//! the token stream produced by `blaze_core::lexer`, so throughput is limited by memory
+//! the token stream produced by `blaze_lexer`, so throughput is limited by memory
 //! bandwidth rather than parsing. The trade-off: rules cannot use type information.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use blaze_core::lexer::{Kind, Token, lex};
+use blaze_lexer::{Kind, Token, lex};
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

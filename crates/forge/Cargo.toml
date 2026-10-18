@@ -8,6 +8,7 @@ description = "Forge: a fast, comment-preserving Rust formatter"
 [dependencies]
 anyhow.workspace = true
 blaze-core.workspace = true
+blaze-lexer.workspace = true
 prettyplease.workspace = true
 rayon.workspace = true
 syn.workspace = true

@@ -20,6 +20,7 @@ syn = { version = "2", default-features = false, features = ["full", "parsing", 
 prettyplease = "0.2"
 toml = "0.8"
 blaze-core = { path = "crates/blaze-core" }
+blaze-lexer = { path = "crates/blaze-lexer" }
 blaze-ember = { path = "crates/ember" }
 blaze-forge = { path = "crates/forge" }
 blaze-spark = { path = "crates/spark" }

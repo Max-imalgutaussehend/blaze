@@ -1,0 +1,6 @@
+[package]
+name = "blaze-lexer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Allocation-light Rust lexer shared by the Blaze tools"

@@ -3,7 +3,7 @@ use anyhow::Result;
 use ignore::WalkBuilder;
 use ignore::WalkState;
 use serde::{Deserialize, Serialize};
-pub mod lexer;
+pub use blaze_lexer as lexer;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

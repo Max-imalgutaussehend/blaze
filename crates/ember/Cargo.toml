@@ -6,5 +6,5 @@ license.workspace = true
 description = "Ember: an extremely fast Rust linter"
 
 [dependencies]
-blaze-core.workspace = true
+blaze-lexer.workspace = true
 rayon.workspace = true

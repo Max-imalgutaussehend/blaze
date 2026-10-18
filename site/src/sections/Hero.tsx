@@ -17,7 +17,7 @@ export function Hero() {
       <div className="wrap" style={{ position: 'relative', textAlign: 'center' }}>
         <motion.a href="#race" initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="badge"
           style={{ padding: '6px 12px', borderRadius: 99, textDecoration: 'none', color: 'var(--ash)', boxShadow: '0 0 0 1px var(--hairline) inset' }}>
-          <span style={{ color: 'var(--rust-1)' }}>●</span>&nbsp; v0.2.0 · early alpha — numbers measured, caveats included →
+          <span style={{ color: 'var(--rust-1)' }}>●</span>&nbsp; v0.2.1 · early alpha — numbers measured, caveats included →
         </motion.a>
         <motion.h1 initial={{ opacity: 0, y: 24, filter: 'blur(10px)' }} animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }} transition={{ duration: 0.9, ease: [0.2, 0.8, 0.2, 1] }}
           style={{ fontSize: 'clamp(2.8rem, 8vw, 6rem)', lineHeight: 1.0, letterSpacing: '-0.045em', fontWeight: 700, margin: '28px auto 22px', maxWidth: 980 }}>
@@ -45,7 +45,7 @@ export function Hero() {
             </div>
           </div>
           <div className="mono" style={{ marginTop: 18, fontSize: 12, color: 'var(--smoke)' }}>
-            v0.2.0 &nbsp;|&nbsp; MIT OR Apache-2.0 &nbsp;|&nbsp; macOS · Linux
+            v0.2.1 &nbsp;|&nbsp; MIT OR Apache-2.0 &nbsp;|&nbsp; macOS · Linux
           </div>
         </motion.div>
       </div>

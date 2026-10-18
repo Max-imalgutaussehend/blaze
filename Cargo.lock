@@ -88,7 +88,7 @@ dependencies = [
 
 [[package]]
 name = "blaze"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "blaze-core",
@@ -101,7 +101,7 @@ dependencies = [
 
 [[package]]
 name = "blaze-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -114,7 +114,7 @@ dependencies = [
 
 [[package]]
 name = "blaze-ember"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "blaze-lexer",
  "rayon",
@@ -122,7 +122,7 @@ dependencies = [
 
 [[package]]
 name = "blaze-forge"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "blaze-core",
@@ -134,11 +134,11 @@ dependencies = [
 
 [[package]]
 name = "blaze-lexer"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "blaze-spark"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -149,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "blaze-ward"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -160,7 +160,7 @@ dependencies = [
 
 [[package]]
 name = "blaze-wasm"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "blaze-ember",
  "blaze-forge",

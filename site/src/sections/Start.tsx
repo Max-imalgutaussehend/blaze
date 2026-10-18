@@ -5,8 +5,8 @@ import { Reveal } from './Reveal'
 const SNIPPETS: Record<string, { label: string; code: string }> = {
   use: { label: 'Use', code: `blaze check          # forge --check + ember + ward\nember .              # lint\nforge --check .      # format check\nspark --cached       # tests; skip proven-unchanged ones\nward                 # dependency policy\nblaze add serde      # anything else goes to cargo` },
   config: { label: 'blaze.toml', code: `[ember]\nignore = ["B006"]\n\n[deny]\nallow_licenses = ["MIT", "Apache-2.0", "Unicode-3.0"]\nban = ["openssl"]\ndeny_unknown_sources = true` },
-  ci: { label: 'GitHub Actions', code: `- uses: Max-imalgutaussehend/blaze@v0.2.0\n- uses: actions/cache@v4\n  with: { path: .blaze_cache, key: blaze-\${{ hashFiles('**/*.rs') }} }\n- run: blaze check` },
-  hook: { label: 'pre-commit', code: `repos:\n  - repo: ${REPO}\n    rev: v0.2.0\n    hooks:\n      - id: forge\n      - id: ember` },
+  ci: { label: 'GitHub Actions', code: `- uses: Max-imalgutaussehend/blaze@v0.2.1\n- uses: actions/cache@v4\n  with: { path: .blaze_cache, key: blaze-\${{ hashFiles('**/*.rs') }} }\n- run: blaze check` },
+  hook: { label: 'pre-commit', code: `repos:\n  - repo: ${REPO}\n    rev: v0.2.1\n    hooks:\n      - id: forge\n      - id: ember` },
 }
 
 export function Start() {

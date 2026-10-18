@@ -282,7 +282,7 @@ pub fn lint_files(files: &[PathBuf]) -> Vec<FileResult> {
         .collect()
 }
 
-fn lint_file(path: &Path) -> FileResult {
+pub fn lint_file(path: &Path) -> FileResult {
     let mut res = FileResult {
         path: path.to_path_buf(),
         diagnostics: Vec::new(),

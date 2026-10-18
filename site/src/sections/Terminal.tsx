@@ -3,12 +3,14 @@ import { useInView } from '../lib/hooks'
 import { Reveal } from './Reveal'
 
 export type Line = { kind: 'cmd' | 'out'; html: string; wait?: number }
-// Lines are taken from real runs: blaze check on this repo, spark on regex-syntax (147 tests).
+// Lines are taken from real runs: build and ci on this repo, spark on regex-syntax (147 tests).
 export const HOME_SCRIPT: Line[] = [
-  { kind: 'cmd', html: 'blaze check' },
-  { kind: 'out', html: '<span class="ok">✔</span> forge   14 files, 14 cached, 0 changed <span class="t">in 8ms</span>', wait: 380 },
-  { kind: 'out', html: '<span class="ok">✔</span> ember   14 files, 0 issues <span class="t">in 3ms</span>', wait: 260 },
-  { kind: 'out', html: '<span class="ok">✔</span> ward    0 violations <span class="t">in 4ms</span>', wait: 260 },
+  { kind: 'cmd', html: 'blaze build' },
+  { kind: 'out', html: '<span class="t">    blaze: up to date, cargo not started (3.5ms)</span>', wait: 300 },
+  { kind: 'cmd', html: 'blaze ci', wait: 500 },
+  { kind: 'out', html: '<span class="ok">✔</span> forge   17 files, 17 cached, 0 changed <span class="t">in 5ms</span>', wait: 380 },
+  { kind: 'out', html: '<span class="ok">✔</span> ember   17 files, 0 issues <span class="t">in 8ms</span>', wait: 260 },
+  { kind: 'out', html: '<span class="ok">✔</span> ward    0 violations <span class="t">in 9ms</span>', wait: 260 },
   { kind: 'cmd', html: 'spark --cached', wait: 700 },
   { kind: 'out', html: '<span class="ok">✔</span> 147 tests, 147 cached, 0 failed <span class="t">in 10ms</span>', wait: 420 },
   { kind: 'cmd', html: 'blaze add serde', wait: 700 },

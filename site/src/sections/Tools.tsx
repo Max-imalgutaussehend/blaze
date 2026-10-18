@@ -9,7 +9,7 @@ export function ToolCard({ t, n = 0 }: { t: ToolInfo; n?: number }) {
       <a className="card spot" {...spot} href={link(`${t.id}/`)} style={{ padding: 26, height: '100%', display: 'block', color: 'inherit', textDecoration: 'none' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <img src={logo(t.id)} alt={`${t.id} logo`} width={56} height={56} />
-          <span className="badge">blaze {t.alias}</span>
+          <span className="badge">{t.badge}</span>
         </div>
         <h3 style={{ margin: '22px 0 4px', fontSize: 24, fontWeight: 600, letterSpacing: '-0.02em' }}>{t.id}</h3>
         <div className="mono" style={{ color: 'var(--rust-1)', fontSize: 12, marginBottom: 12 }}>{t.role}</div>
@@ -33,8 +33,8 @@ export function Tools() {
         <div className="wrap">
           <Reveal>
             <div className="eyebrow">The toolchain</div>
-            <h2 className="h2">Four tools. <span className="grad">One cog.</span></h2>
-            <p className="lede">Each tool ships as its own binary and as a <code>blaze</code> subcommand. Anything else, such as <code>build</code>, <code>add</code> or <code>run</code>, is forwarded to cargo.</p>
+            <h2 className="h2">One front-end. <span className="grad">Four tools.</span></h2>
+            <p className="lede"><code>blaze</code> speeds up the everyday cargo commands and runs the other tools. Each tool also ships as its own binary. Anything blaze does not handle, such as <code>new</code> or <code>publish</code>, is forwarded to cargo.</p>
           </Reveal>
           <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', marginTop: 40 }}>
             {TOOLS.map((t, i) => <ToolCard key={t.id} t={t} n={i} />)}

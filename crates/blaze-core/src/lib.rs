@@ -54,16 +54,48 @@ pub fn config_strings(root: &Path, section: &str, key: &str) -> Vec<String> {
 pub fn hash_bytes(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }
-/// Persistent cache mapping `path -> (content hash, status tag)` for a given tool + config fingerprint.
+
+/// Cheap file identity: modification time and length. Taken *before* a file is read, so a
+/// concurrent edit can only make the cache entry stale (re-checked), never wrong.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Stamp {
+    mtime: u64,
+    len: u64,
+}
+
+impl Stamp {
+    pub fn of(path: &Path) -> Option<Stamp> {
+        let m = std::fs::metadata(path).ok()?;
+        let mtime = m
+            .modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_nanos() as u64;
+        Some(Stamp { mtime, len: m.len() })
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct Entry {
+    m: u64,
+    l: u64,
+    h: String,
+    t: String,
+}
+
+/// Persistent cache mapping `path -> (stamp, content hash, status tag)`.
 ///
-/// A file whose hash matches the stored one was already processed cleanly and is skipped.
+/// `quick` answers from a single `stat` (no file read); `lookup` falls back to the content
+/// hash, so touched-but-unchanged files are still recognised.
 #[derive(Serialize, Deserialize, Default)]
 pub struct Cache {
     key: String,
-    entries: HashMap<String, String>,
+    entries: HashMap<String, Entry>,
     #[serde(skip)]
     path: PathBuf,
 }
+
 impl Cache {
     /// `key` fingerprints tool version + config; a changed key invalidates everything.
     pub fn load(dir: &Path, name: &str, key: &str) -> Self {
@@ -82,15 +114,43 @@ impl Cache {
         cache
     }
 
+    /// Status tag if the file's stamp is unchanged since it was recorded.
+    pub fn quick(&self, file: &Path, stamp: Stamp) -> Option<&str> {
+        let e = self.entries.get(file.to_string_lossy().as_ref())?;
+        (e.m == stamp.mtime && e.l == stamp.len).then_some(e.t.as_str())
+    }
+
     /// Status tag recorded for `file` if its content still hashes to `hash`.
     pub fn lookup(&self, file: &Path, hash: &str) -> Option<&str> {
-        let v = self.entries.get(file.to_string_lossy().as_ref())?;
-        v.strip_prefix(hash)?.strip_prefix('|')
+        let e = self.entries.get(file.to_string_lossy().as_ref())?;
+        (e.h == hash).then_some(e.t.as_str())
+    }
+
+    /// Record a result. Without a stamp the file is stat'ed now.
+    pub fn mark_stamped(
+        &mut self,
+        file: &Path,
+        stamp: Option<Stamp>,
+        hash: &str,
+        tag: &str,
+    ) {
+        let (m, l) = stamp
+            .or_else(|| Stamp::of(file))
+            .map_or((0, 0), |s| (s.mtime, s.len));
+        self.entries
+            .insert(
+                file.to_string_lossy().into_owned(),
+                Entry {
+                    m,
+                    l,
+                    h: hash.to_string(),
+                    t: tag.to_string(),
+                },
+            );
     }
 
     pub fn mark(&mut self, file: &Path, hash: &str, tag: &str) {
-        self.entries
-            .insert(file.to_string_lossy().into_owned(), format!("{hash}|{tag}"));
+        self.mark_stamped(file, None, hash, tag);
     }
 
     pub fn is_clean(&self, file: &Path, hash: &str) -> bool {
@@ -113,6 +173,7 @@ impl Cache {
         Ok(())
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;

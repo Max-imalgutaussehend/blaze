@@ -7,12 +7,15 @@ description = "Blaze: extremely fast Rust tooling (ember, forge, spark, ward)"
 
 [dependencies]
 anyhow.workspace = true
+blaze-cargo.workspace = true
 blaze-core.workspace = true
 blaze-ember.workspace = true
 blaze-forge.workspace = true
 blaze-spark.workspace = true
 blaze-ward.workspace = true
 clap.workspace = true
+mimalloc.workspace = true
+rayon.workspace = true
 
 [[bin]]
 name = "blaze"

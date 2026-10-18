@@ -1,23 +1,29 @@
 //! Parallel, cached Rust formatter built on `syn` + `prettyplease`.
 //!
 //! Comments and blank lines are re-attached by [`reattach`]; files where that cannot be
-//! verified are left untouched. Output follows prettyplease's style, which is close to but not identical to rustfmt's.
-use anyhow::Result;
-use blaze_core::{Cache, hash_bytes};
-use rayon::prelude::*;
-pub mod reattach;
+//! verified are left untouched. Output follows prettyplease's style, which is close to but
+//! not identical to rustfmt's.
 
 use std::path::{Path, PathBuf};
+
+use anyhow::Result;
+use blaze_core::{Cache, Stamp, hash_bytes};
+use blaze_lexer::{Kind, lex};
+use rayon::prelude::*;
+
+pub mod reattach;
+
 #[derive(Debug, Default)]
 pub struct Report {
     /// Files that differ from formatted output (written when not in check mode).
     pub changed: Vec<PathBuf>,
     pub errors: Vec<(PathBuf, String)>,
     pub skipped_cached: usize,
-    /// Files left untouched because they contain comments the formatter cannot yet preserve.
+    /// Files left untouched because the result could not be verified to be safe.
     pub unsupported: Vec<PathBuf>,
     pub total: usize,
 }
+
 #[derive(Debug)]
 pub enum FormatError {
     /// The input is not valid Rust.
@@ -26,14 +32,96 @@ pub enum FormatError {
     Unsupported(&'static str),
 }
 
-pub fn format_source(src: &str) -> Result<String, FormatError> {
+/// Files at least this large are split at top-level item boundaries and parsed in parallel,
+/// so one huge generated file does not become the critical path of a run.
+const CHUNK_MIN: usize = 192 * 1024;
+const CHUNK_TARGET: usize = 96 * 1024;
+
+fn unparse_whole(src: &str) -> Result<String, FormatError> {
     let file = syn::parse_file(src).map_err(|e| FormatError::Syntax(e.to_string()))?;
     // prettyplease panics (`not implemented`) on syntax it cannot print, e.g. unstable items.
-    let formatted = std::panic::catch_unwind(|| prettyplease::unparse(&file))
-        .map_err(|_| FormatError::Unsupported("syntax the printer does not support"))?;
+    std::panic::catch_unwind(|| prettyplease::unparse(&file))
+        .map_err(|_| FormatError::Unsupported("syntax the printer does not support"))
+}
+
+/// Byte offsets just after top-level items, roughly `CHUNK_TARGET` apart.
+pub fn split_points(src: &str) -> Vec<usize> {
+    let toks = lex(src);
+    let mut depth = 0i32;
+    let mut last = 0usize;
+    let mut cuts = Vec::new();
+    for (i, t) in toks.iter().enumerate() {
+        if matches!(t.kind, Kind::Comment | Kind::DocComment) {
+            continue;
+        }
+        match t.text(src) {
+            "(" | "[" | "{" => depth += 1,
+            ")" | "]" => depth -= 1,
+            "}" => {
+                depth -= 1;
+                if depth == 0 && t.end - last >= CHUNK_TARGET {
+                    // only cut when the next token plausibly starts a new item
+                    let next = toks[i + 1..]
+                        .iter()
+                        .find(|n| !matches!(n.kind, Kind::Comment | Kind::DocComment));
+                    let ok = next
+                        .is_none_or(|n| {
+                            let s = n.text(src);
+                            s == "#"
+                                || (n.kind == Kind::Ident
+                                    && !matches!(s, "as" | "else" | "where"))
+                        });
+                    if ok {
+                        cuts.push(t.end);
+                        last = t.end;
+                    }
+                }
+            }
+            ";" if depth == 0 && t.end - last >= CHUNK_TARGET => {
+                cuts.push(t.end);
+                last = t.end;
+            }
+            _ => {}
+        }
+    }
+    cuts
+}
+
+fn unparse_chunked(src: &str) -> Result<String, FormatError> {
+    let cuts = split_points(src);
+    if cuts.is_empty() {
+        return unparse_whole(src);
+    }
+    let mut bounds = vec![0];
+    bounds.extend(cuts);
+    bounds.push(src.len());
+    let parts: Vec<Result<String, FormatError>> = bounds
+        .windows(2)
+        .collect::<Vec<_>>()
+        .par_iter()
+        .map(|w| unparse_whole(&src[w[0]..w[1]]))
+        .collect();
+    // any failure: fall back to the authoritative whole-file path (and its error reporting)
+    let mut out = String::with_capacity(src.len());
+    for p in parts {
+        match p {
+            Ok(s) => out.push_str(&s),
+            Err(_) => return unparse_whole(src),
+        }
+    }
+    Ok(out)
+}
+
+pub fn format_source(src: &str) -> Result<String, FormatError> {
+    let formatted = if src.len() >= CHUNK_MIN {
+        unparse_chunked(src)?
+    } else {
+        unparse_whole(src)?
+    };
     reattach::reattach(src, &formatted)
         .ok_or(FormatError::Unsupported("could not safely preserve comments"))
 }
+
 #[derive(Clone, Copy, PartialEq)]
 enum Status {
     Clean,
@@ -63,36 +151,87 @@ impl Status {
     }
 }
 
-/// Returns the hash that identifies the file's content *after* this run, the resulting
-/// status, and whether the answer came from the cache.
-fn process(
-    path: &Path,
-    check: bool,
-    cache: &Cache,
-) -> Result<(String, Status, bool), String> {
-    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    let hash = hash_bytes(&bytes);
-    if let Some(st) = cache.lookup(path, &hash).and_then(Status::from_tag) {
+struct Outcome {
+    /// Hash of the file's content after this run (empty when answered from a stat match).
+    hash: String,
+    status: Status,
+    /// Answered from the cache without formatting.
+    cached: bool,
+    /// Stamp to record: taken before reading, or after our own write.
+    stamp: Option<Stamp>,
+    /// Answered by `stat` alone, entry is already up to date.
+    quick: bool,
+}
+
+fn process(path: &Path, check: bool, cache: &Cache) -> Result<Outcome, String> {
+    let stamp = Stamp::of(path);
+    if let Some(st) = stamp.and_then(|s| cache.quick(path, s)).and_then(Status::from_tag)
+    {
         // a cached "dirty" file must still be rewritten when not checking
         if st != Status::Dirty || check {
-            return Ok((hash, st, true));
+            return Ok(Outcome {
+                hash: String::new(),
+                status: st,
+                cached: true,
+                stamp,
+                quick: true,
+            });
         }
+    }
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let hash = hash_bytes(&bytes);
+    if let Some(st) = cache.lookup(path, &hash).and_then(Status::from_tag)
+        && (st != Status::Dirty || check)
+    {
+        return Ok(Outcome {
+            hash,
+            status: st,
+            cached: true,
+            stamp,
+            quick: false,
+        });
     }
     let src = String::from_utf8(bytes).map_err(|e| e.to_string())?;
     let out = match format_source(&src) {
         Ok(o) => o,
-        Err(FormatError::Unsupported(_)) => return Ok((hash, Status::Unsupported, false)),
+        Err(FormatError::Unsupported(_)) => {
+            return Ok(Outcome {
+                hash,
+                status: Status::Unsupported,
+                cached: false,
+                stamp,
+                quick: false,
+            });
+        }
         Err(FormatError::Syntax(e)) => return Err(e),
     };
     if out == src {
-        return Ok((hash, Status::Clean, false));
+        return Ok(Outcome {
+            hash,
+            status: Status::Clean,
+            cached: false,
+            stamp,
+            quick: false,
+        });
     }
     if check {
-        return Ok((hash, Status::Dirty, false));
+        return Ok(Outcome {
+            hash,
+            status: Status::Dirty,
+            cached: false,
+            stamp,
+            quick: false,
+        });
     }
     std::fs::write(path, &out).map_err(|e| e.to_string())?;
-    // report as dirty (it changed) but remember the *new* content as clean
-    Ok((hash_bytes(out.as_bytes()), Status::Dirty, false))
+    // reported as dirty (it changed), but the *new* content is what we remember
+    Ok(Outcome {
+        hash: hash_bytes(out.as_bytes()),
+        status: Status::Dirty,
+        cached: false,
+        stamp: Stamp::of(path),
+        quick: false,
+    })
 }
 
 pub fn run(root: &Path, files: &[PathBuf], check: bool) -> Result<Report> {
@@ -100,17 +239,16 @@ pub fn run(root: &Path, files: &[PathBuf], check: bool) -> Result<Report> {
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     // Largest files first: they dominate the critical path, so start them early.
-    let mut order: Vec<&PathBuf> = files.iter().collect();
-    order
-        .sort_by_cached_key(|p| std::cmp::Reverse(
-            std::fs::metadata(p).map_or(0, |m| m.len()),
-        ));
+    let mut order: Vec<(&PathBuf, u64)> = files
+        .iter()
+        .map(|p| (p, std::fs::metadata(p).map_or(0, |m| m.len())))
+        .collect();
+    order.sort_by_key(|&(_, len)| std::cmp::Reverse(len));
     let results: Vec<_> = order
         .par_iter()
-        .map(|p| *p)
-        .map(|path| {
+        .map(|&(path, _)| {
             process(path, check, &cache)
-                .map(|(h, s, c)| (path, h, s, c))
+                .map(|o| (path, o))
                 .map_err(|e| (path.clone(), e))
         })
         .collect();
@@ -122,20 +260,23 @@ pub fn run(root: &Path, files: &[PathBuf], check: bool) -> Result<Report> {
     };
     for r in results {
         match r {
-            Ok((path, hash, status, cached)) => {
-                report.skipped_cached += usize::from(cached);
-                match status {
+            Ok((path, o)) => {
+                report.skipped_cached += usize::from(o.cached);
+                match o.status {
                     Status::Unsupported => report.unsupported.push(path.clone()),
-                    Status::Dirty => {
-                        report.changed.push(path.clone());
-                        // in write mode the file now holds the formatted content
-                        cache.mark(path, &hash, if check { "dirty" } else { "clean" });
-                    }
-                    Status::Clean => cache.mark(path, &hash, "clean"),
+                    Status::Dirty => report.changed.push(path.clone()),
+                    Status::Clean => {}
                 }
-                if status == Status::Unsupported {
-                    cache.mark(path, &hash, status.tag());
+                if o.quick {
+                    continue;
                 }
+                // in write mode a Dirty file now holds the formatted content, i.e. it is clean
+                let tag = if o.status == Status::Dirty && !check {
+                    "clean"
+                } else {
+                    o.status.tag()
+                };
+                cache.mark_stamped(path, o.stamp, &o.hash, tag);
             }
             Err(e) => report.errors.push(e),
         }
@@ -143,15 +284,18 @@ pub fn run(root: &Path, files: &[PathBuf], check: bool) -> Result<Report> {
     cache.save()?;
     Ok(report)
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn formats_and_is_idempotent() {
         let once = format_source("fn  main( ){let x=1;}").unwrap();
         assert_eq!(once, "fn main() {\n    let x = 1;\n}\n");
         assert_eq!(format_source(& once).unwrap(), once);
     }
+
     #[test]
     fn preserves_comments_and_blank_lines() {
         let src = "// head\nfn  main(){\n    let x=1; // one\n\n    // about y\n    let y=2;\n}\n";
@@ -178,6 +322,41 @@ mod tests {
 
     #[test]
     fn reports_syntax_errors() {
-        assert!(format_source("fn (").is_err());
+        assert!(matches!(format_source("fn ("), Err(FormatError::Syntax(_))));
+    }
+
+    /// A big file with items that end in `}` and `;` and tricky `use a::{b};` shapes.
+    fn big_source() -> String {
+        let mut s = String::from(
+            "//! crate docs\n#![allow(dead_code)]\nuse std::{fmt, io};\n",
+        );
+        for i in 0..3000 {
+            s.push_str(
+                &format!(
+                    "/// item {i}\npub struct S{i} {{ pub a: u32, pub b: [u8; 4] }}\nconst C{i}: S{i} = S{i} {{ a: {i}, b: [0; 4] }};\nimpl S{i} {{ pub fn get(&self) -> u32 {{ // trailing\n        self.a + {i} }} }}\nuse self::S{i} as T{i};\n"
+                ),
+            );
+        }
+        s
+    }
+
+    #[test]
+    fn chunked_formatting_equals_whole_file_formatting() {
+        let src = big_source();
+        assert!(src.len() > CHUNK_MIN, "test source must exceed the chunking threshold");
+        assert!(! split_points(& src).is_empty());
+        let whole = reattach::reattach(&src, &unparse_whole(&src).unwrap());
+        let chunked = format_source(&src).ok();
+        assert!(whole.is_some() && whole == chunked);
+    }
+
+    #[test]
+    fn split_points_never_cut_inside_braces_or_before_semicolons() {
+        let src = big_source();
+        for c in split_points(&src) {
+            let before = src[..c].trim_end();
+            assert!(before.ends_with('}') || before.ends_with(';'));
+            assert!(! src[c..].trim_start().starts_with(';'));
+        }
     }
 }

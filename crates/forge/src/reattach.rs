@@ -227,22 +227,20 @@ pub fn reattach_dbg(orig: &str, formatted: &str) -> Result<String, String> {
     }
     let result = out.join("\n");
 
-    // verification
+    // verification: stream both token lists, no intermediate vectors
     let rt = lex(&result);
-    let r_code: Vec<&str> = rt
-        .iter()
-        .filter(|t| !is_comment(t.kind))
-        .map(|t| text(t, &result))
-        .collect();
-    let f_code: Vec<&str> = ft.iter().map(|t| text(t, formatted)).collect();
-    let r_comments: Vec<&str> = rt
-        .iter()
-        .filter(|t| is_comment(t.kind))
-        .map(|t| text(t, &result))
-        .collect();
-    if r_code != f_code
-        || r_comments != orig_comments.iter().map(String::as_str).collect::<Vec<_>>()
-    {
+    let mut expected = ft.iter();
+    let mut comments = orig_comments.iter();
+    for t in &rt {
+        if is_comment(t.kind) {
+            if comments.next().map(String::as_str) != Some(text(t, &result)) {
+                return Err("verify".into());
+            }
+        } else if expected.next().map(|f| text(f, formatted)) != Some(text(t, &result)) {
+            return Err("verify".into());
+        }
+    }
+    if expected.next().is_some() || comments.next().is_some() {
         return Err("verify".into());
     }
     Ok(result)

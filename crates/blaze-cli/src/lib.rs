@@ -6,6 +6,11 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use anyhow::Result;
+use blaze_core::{Cache, Stamp};
+use rayon::prelude::*;
+
+/// Faster general-purpose allocator for the allocation-heavy tools.
+pub use mimalloc::MiMalloc;
 use clap::Args;
 
 #[derive(Args)]
@@ -38,10 +43,31 @@ pub struct SparkArgs {
     /// Skip tests that passed before with a byte-identical test binary (assumes deterministic tests)
     #[arg(long)]
     pub cached: bool,
+    /// Run each test binary once with libtest's own threads (like `cargo test`) instead of one process per test
+    #[arg(long)]
+    pub shared: bool,
 }
 
 #[derive(Args)]
 pub struct WardArgs {}
+
+/// Arguments passed through to the cargo front-end untouched.
+#[derive(Args)]
+pub struct CargoArgs {
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub args: Vec<String>,
+}
+
+/// Exit with the child's own status code (cargo front-end commands).
+pub fn exit_code(r: Result<i32>) -> ExitCode {
+    match r {
+        Ok(c) => ExitCode::from(c.clamp(0, 255) as u8),
+        Err(e) => {
+            eprintln!("error: {e:#}");
+            ExitCode::from(2)
+        }
+    }
+}
 
 pub fn exit(r: Result<bool>) -> ExitCode {
     match r {
@@ -65,7 +91,27 @@ pub fn ember(a: &EmberArgs) -> Result<bool> {
     let mut ignore = a.ignore.clone();
     ignore.extend(blaze_core::config_strings(&PathBuf::from("."), "ember", "ignore"));
     let files = blaze_core::discover_rust_files(&a.paths);
-    let mut results = blaze_ember::lint_files(&files);
+    // Files whose stamp matches a previous clean run are skipped without being read.
+    let mut cache = Cache::load(&PathBuf::from("."), "ember", env!("CARGO_PKG_VERSION"));
+    let checked: Vec<(Option<Stamp>, blaze_ember::FileResult)> = files
+        .par_iter()
+        .filter_map(|p| {
+            let stamp = Stamp::of(p);
+            if stamp.is_some_and(|s| cache.quick(p, s) == Some("clean")) {
+                return None;
+            }
+            Some((stamp, blaze_ember::lint_file(p)))
+        })
+        .collect();
+    let mut results = Vec::new();
+    for (stamp, r) in checked {
+        if r.diagnostics.is_empty() && r.error.is_none() {
+            cache.mark_stamped(&r.path, stamp, "", "clean");
+        } else {
+            results.push(r);
+        }
+    }
+    cache.save()?;
     for r in &mut results {
         r.diagnostics.retain(|d| !ignore.iter().any(|c| c == d.code));
     }
@@ -117,10 +163,15 @@ pub fn spark(a: &SparkArgs) -> Result<bool> {
         &bins,
         a.filter.as_deref(),
         a.cached,
+        a.shared,
         |o| {
+            let t = if o.duration.is_zero() {
+                "     -".to_string()
+            } else {
+                format!("{:>6.2?}", o.duration)
+            };
             println!(
-                "{} {:>6.2?}  {}::{}", if o.passed { "PASS" } else { "FAIL" }, o
-                .duration, o.label, o.name
+                "{} {t}  {}::{}", if o.passed { "PASS" } else { "FAIL" }, o.label, o.name
             );
         },
     )?;

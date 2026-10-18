@@ -10,10 +10,22 @@ import { Playground } from '../sections/Playground'
 import { Terminal, type Line } from '../sections/Terminal'
 import { Reveal } from '../sections/Reveal'
 import { ToolCard } from '../sections/Tools'
-import { TOOLS, fmtT, logo, tool, x, type ToolId } from '../lib/blaze'
+import { TOOLS, fmtT, logo, tool, type ToolId } from '../lib/blaze'
 import { useSpot } from '../lib/hooks'
 
 const SCRIPTS: Partial<Record<ToolId, { title: string; lines: Line[] }>> = {
+  blaze: {
+    title: 'a project that is already built',
+    lines: [
+      { kind: 'cmd', html: 'blaze build' },
+      { kind: 'out', html: '<span class="t">    blaze: up to date, cargo not started (3.5ms)</span>', wait: 300 },
+      { kind: 'cmd', html: 'blaze run -- --version', wait: 600 },
+      { kind: 'out', html: '<span class="t">    blaze: up to date, cargo not started (0.4ms)</span>', wait: 250 },
+      { kind: 'out', html: 'forge 0.3.0-alpha.1', wait: 100 },
+      { kind: 'cmd', html: 'blaze add serde -F derive', wait: 600 },
+      { kind: 'out', html: '      Adding serde v1.0.229 to dependencies with features: derive', wait: 300 },
+    ],
+  },
   spark: {
     title: 'regex-syntax: 147 tests',
     lines: [
@@ -68,8 +80,6 @@ export function ToolPage({ id }: { id: string }) {
   const t = tool(id)
   const [tab, setTab] = useState<'usage' | 'config'>('usage')
   const script = SCRIPTS[t.id]
-  const best = Math.min(...t.bench.rows.filter((r) => r.blaze > 0).map((r) => r.blaze))
-  const worst = Math.max(...t.bench.rows.filter((r) => r.incumbent > 0).map((r) => r.incumbent))
   return (
     <>
       <Nav current={t.id} />
@@ -78,11 +88,11 @@ export function ToolPage({ id }: { id: string }) {
         <div className="grid-lines" />
         <div className="wrap" style={{ position: 'relative' }}>
           <img src={logo(t.id)} alt={`${t.id} logo`} width={96} height={96} style={{ filter: 'drop-shadow(0 0 40px rgba(255,122,61,.45))' }} />
-          <div className="eyebrow" style={{ marginTop: 28 }}>{t.role} · blaze {t.alias}</div>
+          <div className="eyebrow" style={{ marginTop: 28 }}>{t.role} · {t.badge}</div>
           <h1 style={{ fontSize: 'clamp(3rem, 8vw, 5.5rem)', lineHeight: 1, letterSpacing: '-0.045em', fontWeight: 700, margin: '14px 0 16px' }}>{t.id}</h1>
           <p className="lede" style={{ fontSize: '1.4rem', color: '#fff', maxWidth: 760 }}>{t.tagline}</p>
           <div style={{ display: 'flex', gap: 28, marginTop: 34, flexWrap: 'wrap', alignItems: 'center' }}>
-            <div><div className="num grad">{x(worst, best)}</div><div className="mono" style={{ color: 'var(--ash)', fontSize: 12, marginTop: 8 }}>vs the slowest alternative measured below</div></div>
+            <div><div className="num grad">{t.headline.value}</div><div className="mono" style={{ color: 'var(--ash)', fontSize: 12, marginTop: 8, maxWidth: 380 }}>{t.headline.label}</div></div>
             <a className="btn btn-primary" href="#bench">See the benchmark</a>
             <a className="btn btn-ghost" href="#usage">Usage</a>
           </div>
@@ -109,7 +119,7 @@ export function ToolPage({ id }: { id: string }) {
         <Reveal>
           <div className="card" style={{ padding: 24, marginTop: 24, maxWidth: 860 }}>
             <p style={{ color: 'var(--ash)', fontSize: 13.5, margin: '0 0 6px' }}>{t.bench.sub} Grey is the incumbent, orange is {t.id}.</p>
-            <BarChart data={t.bench.rows} xDataKey="name" orientation="horizontal" aspectRatio="16 / 7" margin={{ top: 12, right: 24, bottom: 24, left: 150 }}>
+            <BarChart data={t.bench.rows} xDataKey="name" orientation="horizontal" aspectRatio="16 / 7" margin={{ top: 12, right: 24, bottom: 24, left: 175 }}>
               <Grid vertical horizontal={false} />
               <Bar dataKey="incumbent" fill="var(--chart-line-secondary)" lineCap={6} />
               <Bar dataKey="blaze" fill="var(--chart-line-primary)" lineCap={6} />

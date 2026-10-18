@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { motion } from 'motion/react'
 import { Embers } from './Embers'
-import { INSTALL_CARGO, INSTALL_SH, REPO, logo } from '../lib/blaze'
+import { INSTALL_CARGO, INSTALL_SH, REPO, VERSION, logo } from '../lib/blaze'
 import { useCopy } from '../lib/hooks'
 
 export function Hero() {
@@ -17,14 +17,14 @@ export function Hero() {
       <div className="wrap" style={{ position: 'relative', textAlign: 'center' }}>
         <motion.a href="#race" initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="badge"
           style={{ padding: '6px 12px', borderRadius: 99, textDecoration: 'none', color: 'var(--ash)', boxShadow: '0 0 0 1px var(--hairline) inset' }}>
-          <span style={{ color: 'var(--rust-1)' }}>●</span>&nbsp; v0.2.1 · early alpha, numbers measured, caveats included →
+          <span style={{ color: 'var(--rust-1)' }}>●</span>&nbsp; {VERSION} · alpha, numbers measured, caveats included →
         </motion.a>
         <motion.h1 initial={{ opacity: 0, y: 24, filter: 'blur(10px)' }} animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }} transition={{ duration: 0.9, ease: [0.2, 0.8, 0.2, 1] }}
           style={{ fontSize: 'clamp(2.8rem, 8vw, 6rem)', lineHeight: 1.0, letterSpacing: '-0.045em', fontWeight: 700, margin: '28px auto 22px', maxWidth: 980 }}>
           Rust tooling at the<br /><span className="grad">speed of thought.</span>
         </motion.h1>
         <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.25, duration: 0.8 }} className="lede" style={{ margin: '0 auto 36px', fontSize: '1.2rem' }}>
-          Lint, format, test and audit dependencies with one toolchain, built on a hand-written lexer, parallel workers and content-hash caches. Forged in Rust.
+          A faster way to use cargo, plus a linter, formatter, test runner and dependency checker in one toolchain. Built on a hand-written lexer, parallel workers and fingerprint caches. Forged in Rust.
         </motion.p>
         <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
           <a className="btn btn-primary" href="#start">Get started</a>
@@ -45,7 +45,7 @@ export function Hero() {
             </div>
           </div>
           <div className="mono" style={{ marginTop: 18, fontSize: 12, color: 'var(--smoke)' }}>
-            v0.2.1 &nbsp;|&nbsp; Apache-2.0 &nbsp;|&nbsp; macOS · Linux
+            {VERSION} &nbsp;|&nbsp; Apache-2.0 &nbsp;|&nbsp; macOS · Linux
           </div>
         </motion.div>
       </div>

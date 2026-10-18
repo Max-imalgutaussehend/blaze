@@ -5,14 +5,16 @@ import { Reveal } from './Reveal'
 type Lane = { name: string; them: string; us: string; tThem: number; tUs: number; note: string }
 const COLD: Lane[] = [
   { name: 'Format', them: 'rustfmt', us: 'forge', tThem: R.fmt_rustfmt, tUs: R.fmt_forge_cold, note: `${R.files} files, cold` },
-  { name: 'Lint', them: 'clippy (clean build)', us: 'ember', tThem: R.clippy_cold, tUs: R.lint_ember_crate, note: 'one crate · different depth' },
+  { name: 'Lint', them: 'clippy (clean build)', us: 'ember', tThem: R.clippy_cold, tUs: R.lint_ember_crate, note: 'one crate, different depth' },
   { name: 'Test', them: 'nextest', us: 'spark', tThem: R.test_nextest, tUs: R.test_spark, note: '147 tests' },
+  { name: 'Deps', them: 'cargo deny', us: 'ward', tThem: R.deny_cargo_deny, tUs: R.deny_ward_cold, note: 'licenses, bans, sources, no cache' },
+  { name: 'Add 3 crates', them: 'cargo add', us: 'blaze add', tThem: R.add_cargo_3, tUs: R.add_blaze_3, note: 'needs network, warm index cache' },
 ]
 const CACHED: Lane[] = [
-  { name: 'Format', them: 'rustfmt', us: 'forge (cached)', tThem: R.fmt_rustfmt, tUs: R.fmt_forge_warm, note: `${R.files} files` },
-  { name: 'Lint', them: 'clippy (no changes)', us: 'ember', tThem: R.clippy_warm, tUs: R.lint_ember_crate, note: 'one crate · different depth' },
-  { name: 'Test', them: 'nextest', us: 'spark --cached', tThem: R.test_nextest, tUs: R.test_spark_cached, note: '147 tests · deterministic' },
-  { name: 'Deps', them: 'cargo deny', us: 'ward (cached)', tThem: R.deny_cargo_deny, tUs: R.deny_ward_warm, note: 'licenses · bans · sources' },
+  { name: 'Build', them: 'cargo build', us: 'blaze build', tThem: R.build_cargo_noop, tUs: R.build_blaze_noop, note: 'nothing changed, about 170 crates' },
+  { name: 'Run', them: 'cargo run', us: 'blaze run', tThem: R.run_cargo_noop, tUs: R.run_blaze_noop, note: 'nothing changed' },
+  { name: 'Format', them: 'rustfmt', us: 'forge (repeat)', tThem: R.fmt_rustfmt, tUs: R.fmt_forge_warm, note: `${R.files} files` },
+  { name: 'Test', them: 'nextest', us: 'spark --cached', tThem: R.test_nextest, tUs: R.test_spark_cached, note: '147 tests, deterministic' },
 ]
 
 export function Race() {
@@ -51,7 +53,7 @@ export function Race() {
             <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap', marginBottom: 18 }}>
               <div className="tabs">
                 <button className={mode === 'cold' ? 'on' : ''} onClick={() => setMode('cold')}>Cold</button>
-                <button className={mode === 'cached' ? 'on' : ''} onClick={() => setMode('cached')}>Cached (repeat run)</button>
+                <button className={mode === 'cached' ? 'on' : ''} onClick={() => setMode('cached')}>Repeat run</button>
               </div>
               <button className="btn btn-primary" onClick={start} disabled={running}>{running ? 'Running…' : finished ? '↻ Run again' : '▶ Run'}</button>
               <span className="mono" style={{ marginLeft: 'auto', color: 'var(--ash)', fontSize: 13 }}>t = {(t * 1000).toFixed(0).padStart(4, '0')} ms</span>
@@ -76,7 +78,7 @@ export function Race() {
               </div>
             ))}
             <div style={{ color: 'var(--smoke)', fontSize: 12.5, borderTop: '1px solid #14151a', paddingTop: 14 }}>
-              ember is a much smaller linter than clippy and does not type-check; forge's style is not rustfmt's; cached modes describe repeat runs. See <a href="#benchmarks" style={{ color: 'var(--ash)' }}>the fine print</a>.
+              ember is a much smaller linter than clippy and does not type-check; forge's style is not rustfmt's; repeat-run modes describe nothing-changed situations. See <a href="#benchmarks" style={{ color: 'var(--ash)' }}>the fine print</a>.
             </div>
           </div>
         </Reveal>

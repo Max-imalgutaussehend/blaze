@@ -1,3 +1,6 @@
+#[global_allocator]
+static GLOBAL: blaze::MiMalloc = blaze::MiMalloc;
+
 use std::process::ExitCode;
 
 use clap::Parser;

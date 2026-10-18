@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0-alpha.1
+- blaze is now a cargo front-end: `build`, `check` and `run` skip cargo when none of the tracked inputs changed (rustc dep-info, manifests, lockfile, build-script inputs); `run` execs the binary directly. `add` and `remove` edit Cargo.toml in place and resolve versions from the sparse index with an ETag cache.
+- `blaze ci` replaces the old aggregate `blaze check` (`blaze check` is now cargo check).
+- forge: stat-based skip of unchanged files, large files split at top-level items and parsed in parallel, streaming verification, mimalloc.
+- ember: stat-based skip of files that were clean, mimalloc.
+- spark: `--shared` mode (one process per binary), binaries only hashed when `--cached` is used, `SPARK_TIMINGS=1`.
+- ward: reads Cargo.lock and registry manifests directly, no cargo process.
+- One page per tool on the website, including blaze.
+
 ## 0.2.1
 - Website: one page per tool, no em dashes, capabilities instead of "replaces" wording.
 - License is now Apache-2.0 only; third-party notices in THIRD_PARTY_NOTICES.md.

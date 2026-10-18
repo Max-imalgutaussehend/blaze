@@ -50,6 +50,70 @@ pub struct Violation {
 /// Resolve the dependency graph. `cargo metadata` is the slow part, so its result is cached
 /// keyed by the content of `Cargo.lock` + `Cargo.toml`.
 pub fn load_packages(manifest_dir: &Path) -> Result<Vec<Package>> {
+    // Fast path: Cargo.lock plus the already-extracted registry manifests, no cargo process.
+    if let Some(p) = from_lockfile(manifest_dir) {
+        return Ok(p);
+    }
+    let packages = load_via_metadata(manifest_dir)?;
+    Ok(packages.into_iter().filter(|p| p.source.is_some()).collect())
+}
+
+fn cargo_home() -> Option<std::path::PathBuf> {
+    std::env::var_os("CARGO_HOME")
+        .map(Into::into)
+        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".cargo")))
+}
+
+/// Resolve third-party packages from `Cargo.lock` and `~/.cargo/registry/src/*/<name>-<version>/Cargo.toml`.
+/// Returns `None` (so the caller falls back to `cargo metadata`) when anything is missing:
+/// no lockfile, a git dependency, or a crate that is not extracted locally.
+pub fn from_lockfile(manifest_dir: &Path) -> Option<Vec<Package>> {
+    #[derive(Deserialize)]
+    struct Lock {
+        package: Vec<LockPkg>,
+    }
+    #[derive(Deserialize)]
+    struct LockPkg {
+        name: String,
+        version: String,
+        source: Option<String>,
+    }
+    let lock: Lock = toml::from_str(
+            &std::fs::read_to_string(manifest_dir.join("Cargo.lock")).ok()?,
+        )
+        .ok()?;
+    let src_dirs: Vec<_> = std::fs::read_dir(cargo_home()?.join("registry").join("src"))
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .collect();
+    let mut out = Vec::new();
+    for p in lock.package {
+        // workspace members and path dependencies are your own code
+        let Some(source) = p.source else { continue };
+        if !source.starts_with("registry+") && !source.starts_with("sparse+") {
+            return None;
+        }
+        let manifest = src_dirs
+            .iter()
+            .map(|d| d.join(format!("{}-{}", p.name, p.version)).join("Cargo.toml"))
+            .find(|m| m.exists())?;
+        let table: toml::Table = std::fs::read_to_string(manifest).ok()?.parse().ok()?;
+        let license = table
+            .get("package")
+            .and_then(|p| p.get("license"))
+            .and_then(|l| l.as_str())
+            .map(str::to_string);
+        out.push(Package {
+            name: p.name,
+            version: p.version,
+            license,
+            source: Some(source),
+        });
+    }
+    Some(out)
+}
+
+fn load_via_metadata(manifest_dir: &Path) -> Result<Vec<Package>> {
     let mut key_src = std::fs::read(manifest_dir.join("Cargo.lock")).unwrap_or_default();
     key_src.extend(std::fs::read(manifest_dir.join("Cargo.toml")).unwrap_or_default());
     let key = blake3::hash(&key_src).to_hex().to_string();
@@ -206,6 +270,25 @@ mod tests {
     fn allow(ids: &[&str]) -> Vec<String> {
         ids.iter().map(|s| s.to_string()).collect()
     }
+    #[test]
+    fn lockfile_fast_path_matches_cargo_metadata_for_third_party_crates() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let Some(fast) = from_lockfile(&root) else { return }; // registry not extracted: nothing to compare
+        let slow: Vec<Package> = load_via_metadata(&root)
+            .unwrap()
+            .into_iter()
+            .filter(|p| p.source.is_some())
+            .collect();
+        let key = |p: &Package| (p.name.clone(), p.version.clone(), p.license.clone());
+        let (mut a, mut b): (Vec<_>, Vec<_>) = (
+            fast.iter().map(key).collect(),
+            slow.iter().map(key).collect(),
+        );
+        a.sort();
+        b.sort();
+        assert_eq!(a, b);
+    }
+
     #[test]
     fn spdx_expressions() {
         let a = allow(&["MIT", "Apache-2.0"]);

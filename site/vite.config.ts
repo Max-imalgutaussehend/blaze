@@ -14,6 +14,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: page('index.html'),
+        blaze: page('blaze/index.html'),
         ember: page('ember/index.html'),
         forge: page('forge/index.html'),
         spark: page('spark/index.html'),

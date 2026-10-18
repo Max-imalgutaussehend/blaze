@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { INSTALL_CARGO, INSTALL_SH, REPO, logo } from '../lib/blaze'
+import { INSTALL_CARGO, INSTALL_SH, REPO, link, logo } from '../lib/blaze'
 import { Reveal } from './Reveal'
 
 const SNIPPETS: Record<string, { label: string; code: string }> = {
@@ -35,8 +35,8 @@ export function Start() {
 
 export function Footer() {
   const cols = [
-    { h: 'Tools', l: [['ember', '#tools'], ['forge', '#tools'], ['spark', '#tools'], ['ward', '#tools']] },
-    { h: 'Docs', l: [['Get started', '#start'], ['Benchmarks', '#benchmarks'], ['Playground', '#playground'], ['Changelog', `${REPO}/blob/main/CHANGELOG.md`]] },
+    { h: 'Tools', l: [['ember', link('ember/')], ['forge', link('forge/')], ['spark', link('spark/')], ['ward', link('ward/')]] },
+    { h: 'Docs', l: [['Get started', link('#start')], ['Benchmarks', link('#benchmarks')], ['Playground', link('#playground')], ['Changelog', `${REPO}/blob/main/CHANGELOG.md`]] },
     { h: 'Project', l: [['GitHub', REPO], ['Releases', `${REPO}/releases`], ['Issues', `${REPO}/issues`], ['bench/run.py', `${REPO}/blob/main/bench/run.py`]] },
   ]
   return (
@@ -44,8 +44,8 @@ export function Footer() {
       <div className="wrap">
         <div style={{ display: 'grid', gap: 32, gridTemplateColumns: 'minmax(220px,1.4fr) repeat(3, minmax(120px, 1fr))' }}>
           <div>
-            <a className="brand" href="#top" style={{ marginBottom: 14 }}><img src={logo('blaze')} alt="" />blaze</a>
-            <p style={{ color: 'var(--smoke)', fontSize: 14, maxWidth: 280, lineHeight: 1.55 }}>Extremely fast Rust tooling. An independent early-stage project, not affiliated with Astral or the Rust Project.</p>
+            <a className="brand" href={link("")} style={{ marginBottom: 14 }}><img src={logo('blaze')} alt="" />blaze</a>
+            <p style={{ color: 'var(--smoke)', fontSize: 14, maxWidth: 280, lineHeight: 1.55 }}>Extremely fast Rust tooling. An independent early-stage project, not affiliated with the Rust Project.</p>
           </div>
           {cols.map((c) => (
             <div key={c.h}>
@@ -55,7 +55,7 @@ export function Footer() {
           ))}
         </div>
         <div className="mono" style={{ marginTop: 48, fontSize: 12, color: 'var(--smoke)' }}>
-          © 2026 Blaze contributors &nbsp;|&nbsp; MIT OR Apache-2.0 &nbsp;|&nbsp; charts by bklit ui &nbsp;|&nbsp; design after Raycast style (Refero)
+          © 2026 Blaze contributors &nbsp;|&nbsp; Apache-2.0
         </div>
       </div>
     </footer>

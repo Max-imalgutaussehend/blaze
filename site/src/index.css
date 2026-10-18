@@ -186,7 +186,7 @@
     @apply font-sans;
     }
 }
-/* ───────── Blaze theme: Raycast-style tokens (void black, one warm accent) ───────── */
+/* ───────── Blaze theme tokens (void black, one warm accent) ───────── */
 :root,
 :root.dark {
   --void: #040506;

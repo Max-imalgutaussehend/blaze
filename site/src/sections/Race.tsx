@@ -44,7 +44,7 @@ export function Race() {
         <Reveal>
           <div className="eyebrow">Speed</div>
           <h2 className="h2">Press play. <span className="grad">Watch it finish.</span></h2>
-          <p className="lede">A real-time replay of the timings from <code>bench/results.json</code> — same clock, same machine, best of three. This is a replay, not a live benchmark.</p>
+          <p className="lede">A real-time replay of the timings from <code>bench/results.json</code>: same clock, same machine, best of three. This is a replay, not a live benchmark.</p>
         </Reveal>
         <Reveal delay={0.1}>
           <div className="card" style={{ marginTop: 36, padding: 28 }}>
@@ -68,7 +68,7 @@ export function Race() {
                     <div key={b.label} className={`lane ${b.cls} ${done ? 'done' : ''}`}>
                       <span style={{ color: b.cls === 'us' ? '#fff' : 'var(--ash)' }}>{b.label}</span>
                       <div className="track"><div className={`fill ${b.cls}`} style={{ width: `${t === 0 ? 0 : p * 100}%` }} /></div>
-                      <span className="time">{done ? `${fmtT(b.dur)} ✓` : t === 0 ? '—' : fmtT(t)}</span>
+                      <span className="time">{done ? `${fmtT(b.dur)} ✓` : t === 0 ? '·' : fmtT(t)}</span>
                     </div>
                   )
                 })}

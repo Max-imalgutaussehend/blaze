@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { useInView } from '../lib/hooks'
 import { Reveal } from './Reveal'
 
-type Line = { kind: 'cmd' | 'out'; html: string; wait?: number }
+export type Line = { kind: 'cmd' | 'out'; html: string; wait?: number }
 // Lines are taken from real runs: blaze check on this repo, spark on regex-syntax (147 tests).
-const SCRIPT: Line[] = [
+export const HOME_SCRIPT: Line[] = [
   { kind: 'cmd', html: 'blaze check' },
   { kind: 'out', html: '<span class="ok">✔</span> forge   14 files, 14 cached, 0 changed <span class="t">in 8ms</span>', wait: 380 },
   { kind: 'out', html: '<span class="ok">✔</span> ember   14 files, 0 issues <span class="t">in 3ms</span>', wait: 260 },
@@ -15,7 +15,7 @@ const SCRIPT: Line[] = [
   { kind: 'out', html: '<span class="dim">→ forwarded to cargo</span>', wait: 300 },
 ]
 
-export function Terminal() {
+export function Terminal({ script = HOME_SCRIPT, title = 'sample session: numbers from real runs' }: { script?: Line[]; title?: string }) {
   const [ref, seen] = useInView<HTMLDivElement>()
   const [shown, setShown] = useState<{ kind: string; html: string }[]>([])
   const [typing, setTyping] = useState('')
@@ -28,7 +28,7 @@ export function Terminal() {
     setShown([]); setTyping('')
     let t = 250
     const at = (ms: number, fn: () => void) => timers.current.push(window.setTimeout(fn, ms))
-    SCRIPT.forEach((l) => {
+    script.forEach((l) => {
       t += l.wait ?? 0
       if (l.kind === 'cmd') {
         for (let i = 1; i <= l.html.length; i++) { const s = l.html.slice(0, i); at(t + i * 42, () => setTyping(s)) }
@@ -37,20 +37,20 @@ export function Terminal() {
       } else at(t, () => setShown((p) => [...p, l]))
     })
     return () => timers.current.forEach(clearTimeout)
-  }, [seen, run])
+  }, [seen, run, script])
 
   return (
     <section className="wrap" style={{ marginTop: -10, paddingBottom: 40 }}>
       <Reveal>
         <div ref={ref} className="win" style={{ maxWidth: 820, margin: '0 auto' }}>
-          <div className="win-bar"><i /><i /><i /><span>sample session — numbers from real runs</span>
+          <div className="win-bar"><i /><i /><i /><span>{title}</span>
             <button onClick={() => setRun((r) => r + 1)} className="mono" style={{ marginLeft: 'auto', background: 'none', border: 0, color: 'var(--smoke)', cursor: 'pointer', fontSize: 12 }}>↻ replay</button>
           </div>
           <div className="term">
             {shown.map((l, i) => l.kind === 'cmd'
               ? <div key={i}><span className="p">❯ </span>{l.html}</div>
               : <div key={i} dangerouslySetInnerHTML={{ __html: l.html }} />)}
-            {(typing || shown.length < SCRIPT.length) && <div><span className="p">❯ </span>{typing}<span className="caret" /></div>}
+            {(typing || shown.length < script.length) && <div><span className="p">❯ </span>{typing}<span className="caret" /></div>}
           </div>
         </div>
       </Reveal>

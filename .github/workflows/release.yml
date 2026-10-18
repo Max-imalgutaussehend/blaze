@@ -22,7 +22,7 @@ jobs:
           d=blaze-${{ matrix.target }}
           mkdir "$d"
           for b in blaze ember forge spark ward; do cp target/${{ matrix.target }}/release/$b "$d/"; done
-          cp README.md LICENSE-MIT "$d/"
+          cp README.md LICENSE "$d/"
           tar -czf "$d.tar.gz" "$d"
       - uses: actions/upload-artifact@v4
         with: { name: "${{ matrix.target }}", path: "*.tar.gz" }

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { format, lint, type Diag } from '../lib/wasm'
 import { Reveal } from './Reveal'
 
-const SAMPLE = `// Config loader — try editing me.
+const SAMPLE = `// Config loader. Try editing me.
 use std::fs;
 
 /// Reads the port from disk.
@@ -23,8 +23,8 @@ fn main(){
 }
 `
 
-export function Playground() {
-  const [tab, setTab] = useState<'lint' | 'fmt'>('lint')
+export function Playground({ only, id = 'playground', heading = true }: { only?: 'lint' | 'fmt'; id?: string; heading?: boolean }) {
+  const [tab, setTab] = useState<'lint' | 'fmt'>(only ?? 'lint')
   const [src, setSrc] = useState(SAMPLE)
   const [diags, setDiags] = useState<Diag[]>([])
   const [fmtOut, setFmtOut] = useState<string>('')
@@ -48,22 +48,22 @@ export function Playground() {
   const byLine = useMemo(() => { const m = new Map<number, Diag[]>(); diags.forEach((d) => m.set(d.line, [...(m.get(d.line) ?? []), d])); return m }, [diags])
 
   return (
-    <section id="playground" className="section">
+    <section id={id} className="section">
       <div className="wrap">
-        <Reveal>
+        {heading && <Reveal>
           <div className="eyebrow">Playground</div>
           <h2 className="h2">The real tools, <span className="grad">running in your browser.</span></h2>
-          <p className="lede">This is ember and forge compiled to WebAssembly (<code>crates/blaze-wasm</code>, 875&nbsp;KB) — not a mock-up. Edit the code; nothing leaves your machine.</p>
-        </Reveal>
+          <p className="lede">This is ember and forge compiled to WebAssembly (<code>crates/blaze-wasm</code>, 875&nbsp;KB) (not a mock-up). Edit the code; nothing leaves your machine.</p>
+        </Reveal>}
         <Reveal delay={0.1}>
           <div className="win" style={{ marginTop: 32 }}>
             <div className="win-bar">
               <i /><i /><i />
               <span>main.rs</span>
-              <div className="tabs" style={{ marginLeft: 'auto' }}>
+              {!only && <div className="tabs" style={{ marginLeft: 'auto' }}>
                 <button className={tab === 'lint' ? 'on' : ''} onClick={() => setTab('lint')}>ember · lint</button>
                 <button className={tab === 'fmt' ? 'on' : ''} onClick={() => setTab('fmt')}>forge · format</button>
-              </div>
+              </div>}
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
               <div style={{ borderRight: '1px solid #14151a' }}>

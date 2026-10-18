@@ -1,7 +1,9 @@
 # Changelog
 
 ## 0.2.1
-- New website (Vite/React/Tailwind): hero, replay race, bklit charts, in-browser WASM playground running the real ember and forge.
+- Website: one page per tool, no em dashes, capabilities instead of "replaces" wording.
+- License is now Apache-2.0 only; third-party notices in THIRD_PARTY_NOTICES.md.
+- New website (Vite/React/Tailwind): hero, replay race, charts, in-browser WASM playground running the real ember and forge.
 - New logo family: Rust-style cog ring with rivets and per-tool glyphs.
 - `blaze-lexer` split into its own crate; `blaze-wasm` crate for the playground.
 

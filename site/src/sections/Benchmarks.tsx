@@ -29,7 +29,7 @@ export function Benchmarks() {
         <Reveal>
           <div className="eyebrow">Benchmarks</div>
           <h2 className="h2">Numbers you can <span className="grad">reproduce.</span></h2>
-          <p className="lede">Charts are drawn with <a href="https://bklit.com" style={{ color: 'var(--rust-1)' }}>bklit ui</a> from <code>bench/results.json</code>, produced by <code>bench/run.py</code> on {R.machine}.</p>
+          <p className="lede">Drawn from <code>bench/results.json</code>, produced by <code>bench/run.py</code> on {R.machine}.</p>
         </Reveal>
         <div style={{ display: 'grid', gap: 18, gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', marginTop: 36 }}>
           <Reveal>
@@ -62,7 +62,7 @@ export function Benchmarks() {
           <div className="card" style={{ marginTop: 18, padding: 28, borderLeft: '3px solid var(--rust-1)', borderRadius: 12 }}>
             <b>What these numbers do not say.</b>
             <p style={{ color: 'var(--ash)', margin: '8px 0 0', fontSize: 14.5, lineHeight: 1.6 }}>
-              ember has 6 syntactic rules and no type information — it is not a clippy replacement ({x(R.clippy_cold, R.lint_ember_crate)} compares speed, not coverage). forge prints with prettyplease, so its style is not rustfmt's, and rustfmt also follows <code>mod</code> children. Cached figures describe repeat runs. Cold formatting is {x(R.fmt_rustfmt, R.fmt_forge_cold)} and cold testing {x(R.test_nextest, R.test_spark)} — real, but modest; the large gaps come from caching. ember scans {R.full_corpus_files.toLocaleString()} files ({R.full_corpus_mb} MB) in {R.lint_ember_full_corpus.toFixed(1)} s. Absolute times vary with load.
+              ember has 6 syntactic rules and no type information, so it is not a clippy replacement ({x(R.clippy_cold, R.lint_ember_crate)} compares speed, not coverage). forge prints with prettyplease, so its style is not rustfmt's, and rustfmt also follows <code>mod</code> children. Cached figures describe repeat runs. Cold formatting is {x(R.fmt_rustfmt, R.fmt_forge_cold)} and cold testing {x(R.test_nextest, R.test_spark)} (real, but modest); the large gaps come from caching. ember scans {R.full_corpus_files.toLocaleString()} files ({R.full_corpus_mb} MB) in {R.lint_ember_full_corpus.toFixed(1)} s. Absolute times vary with load.
             </p>
           </div>
         </Reveal>

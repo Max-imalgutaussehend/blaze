@@ -1,0 +1,15 @@
+[package]
+name = "blaze"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Blaze: fast, unified Rust tooling (lint, format, test, deny)"
+
+[dependencies]
+anyhow.workspace = true
+blaze-core.workspace = true
+blaze-deny.workspace = true
+blaze-fmt.workspace = true
+blaze-lint.workspace = true
+blaze-test.workspace = true
+clap.workspace = true

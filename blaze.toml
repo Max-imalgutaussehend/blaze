@@ -1,0 +1,4 @@
+[deny]
+allow_licenses=["MIT","Apache-2.0","Unicode-3.0","Unlicense","Zlib","BSD-3-Clause","ISC","CC0-1.0"]
+deny_duplicates=false
+deny_unknown_sources=true

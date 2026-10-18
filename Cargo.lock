@@ -88,44 +88,42 @@ dependencies = [
 
 [[package]]
 name = "blaze"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "blaze-core",
- "blaze-deny",
- "blaze-fmt",
- "blaze-lint",
- "blaze-test",
+ "blaze-ember",
+ "blaze-forge",
+ "blaze-spark",
+ "blaze-ward",
  "clap",
 ]
 
 [[package]]
 name = "blaze-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "blake3",
  "ignore",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "blaze-deny"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
  "toml",
 ]
 
 [[package]]
-name = "blaze-fmt"
-version = "0.1.0"
+name = "blaze-ember"
+version = "0.2.0"
+dependencies = [
+ "blaze-core",
+ "rayon",
+]
+
+[[package]]
+name = "blaze-forge"
+version = "0.2.0"
 dependencies = [
  "anyhow",
- "blake3",
  "blaze-core",
  "prettyplease",
  "rayon",
@@ -133,24 +131,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "blaze-lint"
-version = "0.1.0"
+name = "blaze-spark"
+version = "0.2.0"
 dependencies = [
  "anyhow",
- "blaze-core",
- "proc-macro2",
- "rayon",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "blaze-test"
-version = "0.1.0"
-dependencies = [
- "anyhow",
+ "blake3",
  "rayon",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "blaze-ward"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "serde",
+ "serde_json",
+ "toml",
 ]
 
 [[package]]

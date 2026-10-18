@@ -5,6 +5,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: cargo fmt --check
+      - uses: actions/cache@v4
+        with: { path: .blaze_cache, key: "blaze-${{ hashFiles('**/*.rs', 'Cargo.lock') }}", restore-keys: "blaze-" }
+      - run: cargo build --release
+      - run: ./target/release/blaze check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test

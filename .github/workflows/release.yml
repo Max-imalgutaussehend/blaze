@@ -1,0 +1,37 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { os: macos-14, target: aarch64-apple-darwin }
+          - { os: macos-14, target: x86_64-apple-darwin }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add ${{ matrix.target }}
+      - run: cargo build --release --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          d=blaze-${{ matrix.target }}
+          mkdir "$d"
+          for b in blaze ember forge spark ward; do cp target/${{ matrix.target }}/release/$b "$d/"; done
+          cp README.md LICENSE-MIT "$d/"
+          tar -czf "$d.tar.gz" "$d"
+      - uses: actions/upload-artifact@v4
+        with: { name: "${{ matrix.target }}", path: "*.tar.gz" }
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz install.sh --generate-notes
+        env: { GH_TOKEN: "${{ github.token }}" }

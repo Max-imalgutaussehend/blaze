@@ -30,12 +30,12 @@ impl Config {
             return Ok(Config::default());
         }
         let text = std::fs::read_to_string(&path)?;
-        let f: File =
-            toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        let f: File = toml::from_str(&text)
+            .with_context(|| format!("parsing {}", path.display()))?;
         Ok(f.deny.unwrap_or_default())
     }
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, serde::Serialize)]
 pub struct Package {
     pub name: String,
     pub version: String,
@@ -47,31 +47,66 @@ pub struct Violation {
     pub kind: &'static str,
     pub message: String,
 }
+/// Resolve the dependency graph. `cargo metadata` is the slow part, so its result is cached
+/// keyed by the content of `Cargo.lock` + `Cargo.toml`.
 pub fn load_packages(manifest_dir: &Path) -> Result<Vec<Package>> {
+    let mut key_src = std::fs::read(manifest_dir.join("Cargo.lock")).unwrap_or_default();
+    key_src.extend(std::fs::read(manifest_dir.join("Cargo.toml")).unwrap_or_default());
+    let key = blake3::hash(&key_src).to_hex().to_string();
+    let cache_file = manifest_dir.join(".blaze_cache").join("ward-metadata.json");
+
+    #[derive(Deserialize, serde::Serialize)]
+    struct Cached {
+        key: String,
+        packages: Vec<Package>,
+    }
+    if let Some(c) = std::fs::read(&cache_file)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Cached>(&b).ok()) && c.key == key
+    {
+        return Ok(c.packages);
+    }
+
     let out = Command::new("cargo")
         .args(["metadata", "--format-version", "1", "--locked"])
         .current_dir(manifest_dir)
         .output()
         .context("running cargo metadata")?;
     if !out.status.success() {
-        bail!(
-            "cargo metadata failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
+        bail!("cargo metadata failed: {}", String::from_utf8_lossy(& out.stderr));
     }
     #[derive(Deserialize)]
     struct Meta {
         packages: Vec<Package>,
     }
-    Ok(serde_json::from_slice::<Meta>(&out.stdout)?.packages)
+    let packages = serde_json::from_slice::<Meta>(&out.stdout)?.packages;
+    if let Some(dir) = cache_file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+        let _ = std::fs::write(
+            &cache_file,
+            serde_json::to_vec(
+                &Cached {
+                    key,
+                    packages: packages
+                        .iter()
+                        .map(|p| Package {
+                            name: p.name.clone(),
+                            version: p.version.clone(),
+                            license: p.license.clone(),
+                            source: p.source.clone(),
+                        })
+                        .collect(),
+                },
+            )?,
+        );
+    }
+    Ok(packages)
 }
+
 /// Evaluate an SPDX expression (`A OR B`, `A AND B`, `A/B`, parentheses, `WITH` exceptions)
 /// against the allow-list.
 pub fn license_allowed(expr: &str, allowed: &[String]) -> bool {
-    let normalized = expr
-        .replace('/', " OR ")
-        .replace('(', " ( ")
-        .replace(')', " ) ");
+    let normalized = expr.replace('/', " OR ").replace('(', " ( ").replace(')', " ) ");
     let tokens: Vec<&str> = normalized.split_whitespace().collect();
     let mut pos = 0;
     parse_or(&tokens, &mut pos, allowed)
@@ -128,19 +163,24 @@ pub fn check(packages: &[Package], cfg: &Config) -> Vec<Violation> {
         }
         if !cfg.allow_licenses.is_empty() {
             match &p.license {
-                None => v.push(Violation {
-                    kind: "license",
-                    message: format!("{} {} has no license field", p.name, p.version),
-                }),
-                Some(l) if !license_allowed(l, &cfg.allow_licenses) => v.push(Violation {
-                    kind: "license",
-                    message: format!("{} {} license `{l}` is not allowed", p.name, p.version),
-                }),
+                None => {
+                    v.push(Violation {
+                        kind: "license",
+                        message: format!("{} {} has no license field", p.name, p.version),
+                    })
+                }
+                Some(l) if !license_allowed(l, &cfg.allow_licenses) => {
+                    v.push(Violation {
+                        kind: "license",
+                        message: format!(
+                            "{} {} license `{l}` is not allowed", p.name, p.version
+                        ),
+                    })
+                }
                 _ => {}
             }
         }
-        if cfg.deny_unknown_sources
-            && let Some(src) = &p.source
+        if cfg.deny_unknown_sources && let Some(src) = &p.source
             && !src.starts_with("registry+https://github.com/rust-lang/crates.io-index")
             && !src.starts_with("sparse+https://index.crates.io")
         {
@@ -169,12 +209,12 @@ mod tests {
     #[test]
     fn spdx_expressions() {
         let a = allow(&["MIT", "Apache-2.0"]);
-        assert!(license_allowed("MIT OR GPL-3.0", &a));
-        assert!(license_allowed("MIT/Apache-2.0", &a));
-        assert!(!license_allowed("MIT AND GPL-3.0", &a));
-        assert!(license_allowed("(MIT OR GPL-3.0) AND Apache-2.0", &a));
-        assert!(license_allowed("Apache-2.0 WITH LLVM-exception", &a));
-        assert!(!license_allowed("GPL-3.0", &a));
+        assert!(license_allowed("MIT OR GPL-3.0", & a));
+        assert!(license_allowed("MIT/Apache-2.0", & a));
+        assert!(! license_allowed("MIT AND GPL-3.0", & a));
+        assert!(license_allowed("(MIT OR GPL-3.0) AND Apache-2.0", & a));
+        assert!(license_allowed("Apache-2.0 WITH LLVM-exception", & a));
+        assert!(! license_allowed("GPL-3.0", & a));
     }
     fn pkg(name: &str, version: &str, license: Option<&str>) -> Package {
         Package {

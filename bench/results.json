@@ -1,0 +1,20 @@
+{
+  "machine": "arm64 Darwin, 8 cores",
+  "files": 2000,
+  "fmt_rustfmt": 2.503,
+  "fmt_forge_cold": 0.9689,
+  "fmt_forge_warm": 0.1062,
+  "lint_ember": 0.1193,
+  "lint_ember_full_corpus": 1.5237,
+  "full_corpus_files": 27612,
+  "full_corpus_mb": 522,
+  "test_cargo_test": 2.388,
+  "test_nextest": 0.6552,
+  "test_spark": 0.3547,
+  "test_spark_cached": 0.045,
+  "clippy_cold": 1.0347,
+  "clippy_warm": 0.1281,
+  "lint_ember_crate": 0.0092,
+  "deny_cargo_deny": 0.1588,
+  "deny_ward_warm": 0.0082
+}

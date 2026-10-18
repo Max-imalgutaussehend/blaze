@@ -1,13 +1,10 @@
 [package]
-name = "blaze-fmt"
+name = "blaze-ember"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Ember: an extremely fast Rust linter"
 
 [dependencies]
-anyhow.workspace = true
 blaze-core.workspace = true
-blake3.workspace = true
-prettyplease.workspace = true
 rayon.workspace = true
-syn.workspace = true

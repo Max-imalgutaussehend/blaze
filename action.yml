@@ -1,0 +1,9 @@
+name: Setup Blaze
+description: Install blaze, ember, forge, spark and ward from the latest release
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        curl -LsSf https://github.com/Max-imalgutaussehend/blaze/releases/latest/download/install.sh | sh
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"

@@ -3,13 +3,29 @@ name = "blaze"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Blaze: fast, unified Rust tooling (lint, format, test, deny)"
+description = "Blaze: extremely fast Rust tooling (ember, forge, spark, ward)"
 
 [dependencies]
 anyhow.workspace = true
 blaze-core.workspace = true
-blaze-deny.workspace = true
-blaze-fmt.workspace = true
-blaze-lint.workspace = true
-blaze-test.workspace = true
+blaze-ember.workspace = true
+blaze-forge.workspace = true
+blaze-spark.workspace = true
+blaze-ward.workspace = true
 clap.workspace = true
+
+[[bin]]
+name = "blaze"
+path = "src/main.rs"
+[[bin]]
+name = "ember"
+path = "src/bin/ember.rs"
+[[bin]]
+name = "forge"
+path = "src/bin/forge.rs"
+[[bin]]
+name = "spark"
+path = "src/bin/spark.rs"
+[[bin]]
+name = "ward"
+path = "src/bin/ward.rs"

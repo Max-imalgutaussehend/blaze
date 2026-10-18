@@ -3,6 +3,8 @@ use anyhow::Result;
 use ignore::WalkBuilder;
 use ignore::WalkState;
 use serde::{Deserialize, Serialize};
+pub mod lexer;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -17,25 +19,42 @@ pub fn discover_rust_files(roots: &[PathBuf]) -> Vec<PathBuf> {
     }
     builder.filter_entry(|e| e.file_name() != "target");
     let found = Mutex::new(Vec::new());
-    builder.build_parallel().run(|| {
-        Box::new(|entry| {
-            if let Ok(e) = entry
-                && e.file_type().is_some_and(|t| t.is_file())
-                && e.path().extension().is_some_and(|x| x == "rs")
-            {
-                found.lock().unwrap().push(e.into_path()); // blaze:ignore
-            }
-            WalkState::Continue
-        })
-    });
+    builder
+        .build_parallel()
+        .run(|| {
+            Box::new(|entry| {
+                if let Ok(e) = entry && e.file_type().is_some_and(|t| t.is_file())
+                    && e.path().extension().is_some_and(|x| x == "rs")
+                {
+                    found.lock().unwrap().push(e.into_path()); // blaze:ignore
+                }
+                WalkState::Continue
+            })
+        });
     let mut files = found.into_inner().unwrap(); // blaze:ignore
     files.sort();
     files
 }
+/// Read `[section] key = ["a", "b"]` from `blaze.toml` in `root`; empty when absent.
+pub fn config_strings(root: &Path, section: &str, key: &str) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(root.join("blaze.toml")) else {
+        return Vec::new();
+    };
+    let Ok(table) = text.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    table
+        .get(section)
+        .and_then(|s| s.get(key))
+        .and_then(|v| v.as_array())
+        .map(|a| { a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect() })
+        .unwrap_or_default()
+}
+
 pub fn hash_bytes(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }
-/// Persistent cache mapping `path -> content hash` for a given tool + config fingerprint.
+/// Persistent cache mapping `path -> (content hash, status tag)` for a given tool + config fingerprint.
 ///
 /// A file whose hash matches the stored one was already processed cleanly and is skipped.
 #[derive(Serialize, Deserialize, Default)]
@@ -62,15 +81,26 @@ impl Cache {
         cache.path = path;
         cache
     }
+
+    /// Status tag recorded for `file` if its content still hashes to `hash`.
+    pub fn lookup(&self, file: &Path, hash: &str) -> Option<&str> {
+        let v = self.entries.get(file.to_string_lossy().as_ref())?;
+        v.strip_prefix(hash)?.strip_prefix('|')
+    }
+
+    pub fn mark(&mut self, file: &Path, hash: &str, tag: &str) {
+        self.entries
+            .insert(file.to_string_lossy().into_owned(), format!("{hash}|{tag}"));
+    }
+
     pub fn is_clean(&self, file: &Path, hash: &str) -> bool {
-        self.entries
-            .get(&file.to_string_lossy().into_owned())
-            .is_some_and(|h| h == hash)
+        self.lookup(file, hash) == Some("clean")
     }
+
     pub fn mark_clean(&mut self, file: &Path, hash: String) {
-        self.entries
-            .insert(file.to_string_lossy().into_owned(), hash);
+        self.mark(file, &hash, "clean");
     }
+
     pub fn save(&self) -> Result<()> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -87,14 +117,29 @@ impl Cache {
 mod tests {
     use super::*;
     #[test]
+    fn reads_config_lists() {
+        let dir = std::env::temp_dir().join(format!("blaze-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+                dir.join("blaze.toml"),
+                "[ember]\nignore = [\"B001\", \"B006\"]\n",
+            )
+            .unwrap();
+        assert_eq!(config_strings(& dir, "ember", "ignore"), ["B001", "B006"]);
+        assert!(config_strings(& dir, "ember", "nope").is_empty());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
     fn cache_roundtrip_and_key_invalidation() {
-        let dir = std::env::temp_dir().join(format!("blaze-core-{}", std::process::id()));
+        let dir = std::env::temp_dir()
+            .join(format!("blaze-core-{}", std::process::id()));
         let f = Path::new("a.rs");
         let mut c = Cache::load(&dir, "t", "v1");
         c.mark_clean(f, "h".into());
         c.save().unwrap();
-        assert!(Cache::load(&dir, "t", "v1").is_clean(f, "h"));
-        assert!(!Cache::load(&dir, "t", "v2").is_clean(f, "h"));
+        assert!(Cache::load(& dir, "t", "v1").is_clean(f, "h"));
+        assert!(! Cache::load(& dir, "t", "v2").is_clean(f, "h"));
         std::fs::remove_dir_all(dir).ok();
     }
 }

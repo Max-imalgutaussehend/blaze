@@ -1,0 +1,14 @@
+- id: forge
+  name: forge
+  description: Check Rust formatting with forge
+  entry: forge --check
+  language: system
+  types: [rust]
+  pass_filenames: false
+- id: ember
+  name: ember
+  description: Lint Rust with ember
+  entry: ember
+  language: system
+  types: [rust]
+  pass_filenames: false

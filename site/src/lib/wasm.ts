@@ -5,6 +5,8 @@ type Exports = {
   dealloc(p: number, n: number): void
   lint(p: number, n: number): void
   format(p: number, n: number): void
+  fix(p: number, n: number, unsafeFixes: number): void
+  rules(): void
   result_ptr(): number
   result_len(): number
 }
@@ -16,14 +18,16 @@ export const wasmReady = () =>
     .then((b) => WebAssembly.instantiate(b, {}))
     .then((r) => r.instance.exports as unknown as Exports))
 
-export interface Diag { code: string; message: string; line: number; column: number }
+export interface Diag { code: string; message: string; line: number; column: number; fix: boolean; safe: boolean }
+export interface RuleInfo { code: string; name: string; summary: string; default: boolean; fixable: boolean; unsafe: boolean }
 export type FmtResult = { ok: true; output: string } | { ok: false; error: string }
 
-function call<T>(ex: Exports, fn: 'lint' | 'format', src: string): T {
+function call<T>(ex: Exports, fn: 'lint' | 'format' | 'fix', src: string, flag = 0): T {
   const bytes = new TextEncoder().encode(src)
   const ptr = ex.alloc(bytes.length)
   new Uint8Array(ex.memory.buffer, ptr, bytes.length).set(bytes)
-  ex[fn](ptr, bytes.length)
+  if (fn === 'fix') ex.fix(ptr, bytes.length, flag)
+  else ex[fn](ptr, bytes.length)
   const out = new TextDecoder().decode(new Uint8Array(ex.memory.buffer, ex.result_ptr(), ex.result_len()))
   ex.dealloc(ptr, bytes.length)
   return JSON.parse(out) as T
@@ -47,4 +51,16 @@ export async function format(src: string): Promise<{ res: FmtResult; ms: number 
     ex = await wasmReady()
     return { res: { ok: false, error: 'unsupported syntax (printer limitation)' }, ms: performance.now() - t }
   }
+}
+
+export async function fixAll(src: string, unsafeFixes = false): Promise<{ output: string; applied: number }> {
+  const ex = await wasmReady()
+  return call(ex, 'fix', src, unsafeFixes ? 1 : 0)
+}
+
+export async function listRules(): Promise<RuleInfo[]> {
+  const ex = await wasmReady()
+  ex.rules()
+  const out = new TextDecoder().decode(new Uint8Array(ex.memory.buffer, ex.result_ptr(), ex.result_len()))
+  return JSON.parse(out) as RuleInfo[]
 }

@@ -221,11 +221,21 @@ pub fn lex(src: &str) -> Vec<Token> {
         }
 
         if c.is_ascii_digit() {
+            // `x.0.1` is two field accesses, not the float `0.1`
+            let after_field_dot = out
+                .last()
+                .is_some_and(|t: &Token| {
+                    t.kind == Kind::Punct && t.end - t.start == 1 && b[t.start] == b'.'
+                })
+                && !(out.len() >= 2 && out[out.len() - 2].kind == Kind::Punct
+                    && b[out[out.len() - 2].start] == b'.'
+                    && out[out.len() - 2].end == out[out.len() - 1].start);
             let mut j = i + 1;
             while j < b.len() {
                 let d = b[j];
-                let frac = d == b'.' && b.get(j + 1).is_some_and(|x| x.is_ascii_digit());
-                let exp_sign = (d == b'+' || d == b'-')
+                let frac = !after_field_dot && d == b'.'
+                    && b.get(j + 1).is_some_and(|x| x.is_ascii_digit());
+                let exp_sign = !after_field_dot && (d == b'+' || d == b'-')
                     && matches!(b[j - 1], b'e' | b'E') && !src[i..j].starts_with("0x");
                 if !(is_ident_continue(d) || frac || exp_sign) {
                     break;
@@ -266,8 +276,8 @@ mod tests {
     fn basics_and_positions() {
         let src = "fn f() {\n    x.unwrap();\n}";
         assert_eq!(
-            texts(src), ["fn", "f", "(", ")", "{", "x", ".", "unwrap", "(", ")", ";",
-            "}"]
+            texts(src),
+            ["fn", "f", "(", ")", "{", "x", ".", "unwrap", "(", ")", ";", "}"],
         );
         let t = lex(src).into_iter().find(|t| t.text(src) == "unwrap").unwrap();
         assert_eq!((t.line, t.col), (2, 7));
@@ -278,8 +288,15 @@ mod tests {
         let src = "// a\n/// d\n//! i\n/* b /* n */ */ x //// not doc";
         let k: Vec<_> = lex(src).iter().map(|t| t.kind).collect();
         assert_eq!(
-            k, [Kind::Comment, Kind::DocComment, Kind::DocComment, Kind::Comment,
-            Kind::Ident, Kind::Comment]
+            k,
+            [
+                Kind::Comment,
+                Kind::DocComment,
+                Kind::DocComment,
+                Kind::Comment,
+                Kind::Ident,
+                Kind::Comment,
+            ],
         );
     }
 
@@ -287,15 +304,24 @@ mod tests {
     fn strings_hide_comment_markers() {
         let src = r##"let s = "// no"; let r = r#"/* no "# "quote"; 'c'; 'a: loop {} b'x' b"y""##;
         assert!(
-            lex(src).iter().all(| t | ! matches!(t.kind, Kind::Comment |
-            Kind::DocComment))
+            lex(src).iter().all(|t| !matches!(t.kind, Kind::Comment | Kind::DocComment)),
         );
-        assert!(texts(src).contains(& "'a".to_string()));
-        assert!(texts(src).contains(& "'c'".to_string()));
+        assert!(texts(src).contains(&"'a".to_string()));
+        assert!(texts(src).contains(&"'c'".to_string()));
+    }
+
+    #[test]
+    fn tuple_field_chains_are_not_floats() {
+        assert_eq!(texts("x.0.1"), ["x", ".", "0", ".", "1"]);
+        assert_eq!(texts("0..2.5"), ["0", ".", ".", "2.5"]);
+        assert_eq!(texts("1.5"), ["1.5"]);
     }
 
     #[test]
     fn numbers_and_ops() {
-        assert_eq!(texts("1.5e-3 == 0x1f..2"), ["1.5e-3", "==", "0x1f", ".", ".", "2"]);
+        assert_eq!(
+            texts("1.5e-3 == 0x1f..2"),
+            ["1.5e-3", "==", "0x1f", ".", ".", "2"],
+        );
     }
 }

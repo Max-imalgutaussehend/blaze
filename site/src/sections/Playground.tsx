@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { format, lint, type Diag } from '../lib/wasm'
+import { fixAll, format, lint, type Diag } from '../lib/wasm'
 import { Reveal } from './Reveal'
 
 const SAMPLE = `// Config loader. Try editing me.
@@ -9,10 +9,13 @@ use std::fs;
 fn read_port(path: &str) -> u16 {
     let text = fs::read_to_string(path).unwrap();   // ember: B001
     let v: Vec<&str> = text.split(',').collect();
-    if v.len() == 0 {                                // ember: B004
+    if v.len() == 0 {                                // ember: B004, fixable
         todo!();                                     // ember: B003
     }
-    dbg!(&v);
+    dbg!(&v);                                        // ember: B002, fixable
+    let name = String::from("");                     // ember: B023, fixable
+    let mut tries = 0;
+    tries = tries + 1;                               // ember: B021, unsafe fix
     let ok = v[0].len()>0;
     if ok == true { return v[0].parse().unwrap_or(80); }
     80
@@ -31,6 +34,7 @@ export function Playground({ only, id = 'playground', heading = true }: { only?:
   const [err, setErr] = useState<string | null>(null)
   const [ms, setMs] = useState<number | null>(null)
   const [ready, setReady] = useState(false)
+  const [note, setNote] = useState('')
   const timer = useRef<number>(0)
 
   useEffect(() => {
@@ -44,6 +48,12 @@ export function Playground({ only, id = 'playground', heading = true }: { only?:
     }, 120)
     return () => window.clearTimeout(timer.current)
   }, [src, tab])
+
+  const applyFixes = async (unsafeFixes: boolean) => {
+    const r = await fixAll(src, unsafeFixes)
+    setNote(r.applied ? `${r.applied} fix${r.applied === 1 ? '' : 'es'} applied` : 'nothing to fix')
+    if (r.applied) setSrc(r.output)
+  }
 
   const byLine = useMemo(() => { const m = new Map<number, Diag[]>(); diags.forEach((d) => m.set(d.line, [...(m.get(d.line) ?? []), d])); return m }, [diags])
 
@@ -72,10 +82,15 @@ export function Playground({ only, id = 'playground', heading = true }: { only?:
               <div style={{ minHeight: 360, background: '#050607' }}>
                 {tab === 'lint' ? (
                   <div style={{ padding: '14px 0' }}>
+                    <div style={{ display: 'flex', gap: 8, padding: '0 20px 10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <button className="btn btn-primary" style={{ padding: '7px 12px', fontSize: 13 }} onClick={() => applyFixes(false)}>Fix all (safe)</button>
+                      <button className="btn btn-ghost" style={{ padding: '7px 12px', fontSize: 13 }} onClick={() => applyFixes(true)}>incl. unsafe</button>
+                      <span className="mono" style={{ color: 'var(--smoke)', fontSize: 12 }}>{note}</span>
+                    </div>
                     {!ready && <div className="diag"><span className="dim" style={{ color: 'var(--smoke)' }}>loading wasm…</span></div>}
                     {ready && diags.length === 0 && <div className="diag" style={{ border: 0 }}><b style={{ color: '#59d499' }}>✔ no issues</b></div>}
                     {[...byLine.entries()].map(([line, ds]) => ds.map((d, i) => (
-                      <div key={`${line}-${i}`} className="diag"><span style={{ color: 'var(--smoke)', minWidth: 52 }}>{d.line}:{d.column}</span><b>{d.code}</b><span style={{ color: 'var(--mist)' }}>{d.message}</span></div>
+                      <div key={`${line}-${i}`} className="diag"><span style={{ color: 'var(--smoke)', minWidth: 52 }}>{d.line}:{d.column}</span><b>{d.code}</b><span style={{ color: 'var(--mist)', flex: 1 }}>{d.message}</span>{d.fix && <span className="badge" style={{ color: d.safe ? '#59d499' : 'var(--ash)' }}>{d.safe ? 'fix' : 'unsafe fix'}</span>}</div>
                     )))}
                   </div>
                 ) : err ? (

@@ -39,6 +39,9 @@ struct Bin {
     name: String,
     exe: String,
     dir: String,
+    /// `bin` or `example`.
+    #[serde(default)]
+    kind: String,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -76,39 +79,71 @@ impl Invocation {
         }
     }
 
-    /// Only a small, well-understood set of flags takes the fast path.
+    /// Every flag is part of the cache key, so any invocation can take the fast path except the
+    /// ones that change what cargo prints or writes in ways we do not track.
     fn eligible(&self) -> bool {
-        let mut it = self.cargo_args.iter();
-        while let Some(a) = it.next() {
-            match a.as_str() {
-                "--release" | "-r" | "-q" | "--quiet" | "--locked" | "--offline" => {}
-                "--bin" | "-p" | "--package" => {
-                    if it.next().is_none() {
-                        return false;
-                    }
-                }
-                s if s.starts_with("--bin=") || s.starts_with("--package=") => {}
-                _ => return false,
-            }
-        }
-        true
+        self.cargo_args
+            .iter()
+            .all(|a| {
+                let a = a.as_str();
+                let flag = a.split('=').next().unwrap_or(a);
+                !(matches!(
+                    flag, "--manifest-path" | "--message-format" | "--build-plan" |
+                    "--timings" | "--future-incompat-report" | "--unit-graph" |
+                    "--out-dir" | "--artifact-dir" | "-h" | "--help" | "-V" | "--version"
+                    | "--list"
+                ) || a.starts_with("-Z"))
+            })
     }
 
     fn quiet(&self) -> bool {
         self.cargo_args.iter().any(|a| a == "-q" || a == "--quiet")
     }
 
-    fn bin_name(&self) -> Option<String> {
+    /// `--bin NAME` or `--example NAME`: `(name, is_example)`.
+    fn target(&self) -> Option<(String, bool)> {
         let mut it = self.cargo_args.iter();
         while let Some(a) = it.next() {
-            if a == "--bin" {
-                return it.next().cloned();
-            }
-            if let Some(v) = a.strip_prefix("--bin=") {
-                return Some(v.to_string());
+            for (flag, example) in [("--bin", false), ("--example", true)] {
+                if a == flag {
+                    return it.next().map(|n| (n.clone(), example));
+                }
+                if let Some(v) = a.strip_prefix(&format!("{flag}=")) {
+                    return Some((v.to_string(), example));
+                }
             }
         }
         None
+    }
+}
+
+/// Opt-in shared target directory: `[build] shared_target = true` in blaze.toml or
+/// `BLAZE_SHARED_TARGET=1`. Dependencies compiled for one project are then reused by every other
+/// project that uses the same versions, features and toolchain.
+pub fn shared_target_dir() -> Option<PathBuf> {
+    if std::env::var_os("CARGO_TARGET_DIR").is_some() {
+        return None; // the user already chose
+    }
+    let enabled = std::env::var_os("BLAZE_SHARED_TARGET").is_some()
+        || std::fs::read_to_string("blaze.toml")
+            .ok()
+            .and_then(|t| t.parse::<toml_edit::DocumentMut>().ok())
+            .and_then(|d| d.get("build")?.get("shared_target")?.as_bool())
+            .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    std::env::var_os("BLAZE_TARGET_DIR")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(|h| PathBuf::from(h).join(".cache").join("blaze").join("target"))
+        })
+}
+
+fn apply_target_dir(cmd: &mut Command) {
+    if let Some(d) = shared_target_dir() {
+        cmd.env("CARGO_TARGET_DIR", d);
     }
 }
 
@@ -126,6 +161,9 @@ fn cache_key(inv: &Invocation) -> String {
     let mut h = blake3::Hasher::new();
     h.update(inv.kind.cargo().as_bytes());
     h.update(inv.cargo_args.join("\u{1}").as_bytes());
+    if let Some(d) = shared_target_dir() {
+        h.update(d.to_string_lossy().as_bytes());
+    }
     h.update(std::env::current_dir().unwrap_or_default().to_string_lossy().as_bytes());
     let mut env: Vec<(String, String)> = std::env::vars()
         .filter(|(k, _)| {
@@ -167,7 +205,8 @@ pub fn execute(kind: Kind, args: &[String]) -> Result<i32> {
         Some(r) => {
             if !inv.quiet() {
                 eprintln!(
-                    "    blaze: up to date, cargo not started ({:.1?})", t0.elapsed()
+                    "    blaze: up to date, cargo not started ({:.1?})",
+                    t0.elapsed(),
                 );
             }
             r
@@ -194,9 +233,16 @@ pub fn execute(kind: Kind, args: &[String]) -> Result<i32> {
     if kind != Kind::Run {
         return Ok(0);
     }
-    let bin = match inv.bin_name() {
-        Some(n) => record.bins.iter().find(|b| b.name == n),
-        None if record.bins.len() == 1 => record.bins.first(),
+    let only_bins: Vec<&Bin> = record
+        .bins
+        .iter()
+        .filter(|b| b.kind != "example")
+        .collect();
+    let bin = match inv.target() {
+        Some((n, example)) => {
+            record.bins.iter().find(|b| b.name == n && (b.kind == "example") == example)
+        }
+        None if only_bins.len() == 1 => only_bins.first().copied(),
         None => None,
     };
     match bin {
@@ -208,6 +254,7 @@ pub fn execute(kind: Kind, args: &[String]) -> Result<i32> {
 
 fn delegate(inv: &Invocation) -> Result<i32> {
     let mut cmd = Command::new("cargo");
+    apply_target_dir(&mut cmd);
     cmd.arg(
             match inv.kind {
                 Kind::Build => "build",
@@ -249,7 +296,9 @@ fn is_local(package_id: &str) -> bool {
 
 /// Run cargo with JSON messages, forwarding diagnostics, and derive the fingerprint record.
 fn build_and_record(inv: &Invocation) -> Result<(i32, Option<Record>)> {
-    let mut child = Command::new("cargo")
+    let mut cmd = Command::new("cargo");
+    apply_target_dir(&mut cmd);
+    let mut child = cmd
         .arg(inv.kind.cargo())
         .arg("--message-format=json-render-diagnostics")
         .args(&inv.cargo_args)
@@ -315,11 +364,21 @@ fn build_and_record(inv: &Invocation) -> Result<(i32, Option<Record>)> {
                         None => {}
                     }
                 }
-                if let (Some(exe), Some(true)) = (
-                    v["executable"].as_str(),
-                    v["target"]["kind"].as_array().map(|k| k.iter().any(|x| x == "bin")),
-                ) {
+                let kind_of = |k: &str| {
+                    v["target"]["kind"]
+                        .as_array()
+                        .is_some_and(|a| a.iter().any(|x| x == k))
+                };
+                let kind = if kind_of("bin") {
+                    "bin"
+                } else if kind_of("example") {
+                    "example"
+                } else {
+                    ""
+                };
+                if let (Some(exe), true) = (v["executable"].as_str(), !kind.is_empty()) {
                     bins.push(Bin {
+                        kind: kind.to_string(),
                         name: v["target"]["name"]
                             .as_str()
                             .unwrap_or_default()
@@ -510,9 +569,10 @@ mod tests {
             "cargo:rustc-cfg=x\ncargo::rerun-if-changed=build.rs\ncargo:rerun-if-env-changed=FOO\n",
         );
         assert_eq!(
-            (c, e, any), (vec!["build.rs".to_string()], vec!["FOO".to_string()], true)
+            (c, e, any),
+            (vec!["build.rs".to_string()], vec!["FOO".to_string()], true),
         );
-        assert!(! parse_build_output("cargo:rustc-cfg=x\n").2);
+        assert!(!parse_build_output("cargo:rustc-cfg=x\n").2);
     }
 
     #[test]
@@ -523,11 +583,29 @@ mod tests {
         );
         assert!(i.eligible());
         assert_eq!(i.program_args, ["--flag", "v"]);
-        assert_eq!(i.bin_name().as_deref(), Some("x"));
+        assert_eq!(i.target(), Some(("x".to_string(), false)));
+        let e = Invocation::parse(Kind::Run, &args(&["--example=demo"]));
+        assert_eq!(e.target(), Some(("demo".to_string(), true)));
+        // feature and profile flags are part of the cache key, so they are fine
         assert!(
-            ! Invocation::parse(Kind::Build, & args(& ["--features", "a"])).eligible()
+            Invocation::parse(
+                    Kind::Build,
+                    &args(&["--features", "a", "--all-targets", "--profile", "dev"]),
+                )
+                .eligible(),
         );
-        assert!(! Invocation::parse(Kind::Build, & args(& ["--bin"])).eligible());
+        // flags that change what cargo prints or writes are not
+        assert!(
+            !Invocation::parse(Kind::Build, &args(&["--message-format=json"])).eligible(),
+        );
+        assert!(!Invocation::parse(Kind::Build, &args(&["--timings"])).eligible());
+        assert!(
+            !Invocation::parse(Kind::Build, &args(&["-Zunstable-options"])).eligible(),
+        );
+        assert!(
+            !Invocation::parse(Kind::Build, &args(&["--manifest-path", "x/Cargo.toml"]))
+                .eligible(),
+        );
     }
 
     #[test]
@@ -543,9 +621,9 @@ mod tests {
             outputs: vec![f.to_string_lossy().into_owned()],
             ..Default::default()
         };
-        assert!(is_fresh(& rec));
+        assert!(is_fresh(&rec));
         std::fs::write(&f, "22").unwrap();
-        assert!(! is_fresh(& rec));
+        assert!(!is_fresh(&rec));
         std::fs::remove_dir_all(dir).ok();
     }
 }

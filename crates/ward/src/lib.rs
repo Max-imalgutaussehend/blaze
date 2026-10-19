@@ -1,6 +1,8 @@
 //! Dependency policy checks over `cargo metadata`: licenses, duplicate versions,
 //! banned crates and unapproved sources. Runs offline; advisory (RustSec) checks
 //! are not implemented yet.
+pub mod advisories;
+
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -17,6 +19,14 @@ pub struct Config {
     pub deny_duplicates: bool,
     /// Flag crates from sources other than crates.io (git, alternative registries).
     pub deny_unknown_sources: bool,
+    /// Check RustSec advisories (default: true).
+    pub advisories: Option<bool>,
+    /// Advisory ids to ignore, e.g. `["RUSTSEC-2020-0071"]`.
+    pub ignore_advisories: Vec<String>,
+    /// Fail on `unmaintained` advisories instead of warning.
+    pub deny_unmaintained: bool,
+    /// Fail on `unsound` advisories instead of warning.
+    pub deny_unsound: bool,
 }
 impl Config {
     /// Load the `[deny]` table from `blaze.toml` if present.
@@ -45,6 +55,8 @@ pub struct Package {
 #[derive(Debug, PartialEq, Eq)]
 pub struct Violation {
     pub kind: &'static str,
+    /// Warnings are reported but do not fail the run.
+    pub warning: bool,
     pub message: String,
 }
 /// Resolve the dependency graph. `cargo metadata` is the slow part, so its result is cached
@@ -95,7 +107,9 @@ pub fn from_lockfile(manifest_dir: &Path) -> Option<Vec<Package>> {
         }
         let manifest = src_dirs
             .iter()
-            .map(|d| d.join(format!("{}-{}", p.name, p.version)).join("Cargo.toml"))
+            .map(|d| {
+                d.join(format!("{}-{}", p.name, p.version)).join("Cargo.toml")
+            })
             .find(|m| m.exists())?;
         let table: toml::Table = std::fs::read_to_string(manifest).ok()?.parse().ok()?;
         let license = table
@@ -222,6 +236,7 @@ pub fn check(packages: &[Package], cfg: &Config) -> Vec<Violation> {
         if cfg.ban.iter().any(|b| b == &p.name) {
             v.push(Violation {
                 kind: "ban",
+                warning: false,
                 message: format!("{} {} is banned", p.name, p.version),
             });
         }
@@ -230,14 +245,22 @@ pub fn check(packages: &[Package], cfg: &Config) -> Vec<Violation> {
                 None => {
                     v.push(Violation {
                         kind: "license",
-                        message: format!("{} {} has no license field", p.name, p.version),
+                        warning: false,
+                        message: format!(
+                            "{} {} has no license field",
+                            p.name,
+                            p.version,
+                        ),
                     })
                 }
                 Some(l) if !license_allowed(l, &cfg.allow_licenses) => {
                     v.push(Violation {
                         kind: "license",
+                        warning: false,
                         message: format!(
-                            "{} {} license `{l}` is not allowed", p.name, p.version
+                            "{} {} license `{l}` is not allowed",
+                            p.name,
+                            p.version,
                         ),
                     })
                 }
@@ -250,6 +273,7 @@ pub fn check(packages: &[Package], cfg: &Config) -> Vec<Violation> {
         {
             v.push(Violation {
                 kind: "source",
+                warning: false,
                 message: format!("{} {} comes from `{src}`", p.name, p.version),
             });
         }
@@ -258,6 +282,7 @@ pub fn check(packages: &[Package], cfg: &Config) -> Vec<Violation> {
         for (name, vs) in versions.iter().filter(|(_, vs)| vs.len() > 1) {
             v.push(Violation {
                 kind: "duplicate",
+                warning: false,
                 message: format!("{name} appears in versions {}", vs.join(", ")),
             });
         }
@@ -292,12 +317,12 @@ mod tests {
     #[test]
     fn spdx_expressions() {
         let a = allow(&["MIT", "Apache-2.0"]);
-        assert!(license_allowed("MIT OR GPL-3.0", & a));
-        assert!(license_allowed("MIT/Apache-2.0", & a));
-        assert!(! license_allowed("MIT AND GPL-3.0", & a));
-        assert!(license_allowed("(MIT OR GPL-3.0) AND Apache-2.0", & a));
-        assert!(license_allowed("Apache-2.0 WITH LLVM-exception", & a));
-        assert!(! license_allowed("GPL-3.0", & a));
+        assert!(license_allowed("MIT OR GPL-3.0", &a));
+        assert!(license_allowed("MIT/Apache-2.0", &a));
+        assert!(!license_allowed("MIT AND GPL-3.0", &a));
+        assert!(license_allowed("(MIT OR GPL-3.0) AND Apache-2.0", &a));
+        assert!(license_allowed("Apache-2.0 WITH LLVM-exception", &a));
+        assert!(!license_allowed("GPL-3.0", &a));
     }
     fn pkg(name: &str, version: &str, license: Option<&str>) -> Package {
         Package {
@@ -314,6 +339,7 @@ mod tests {
             ban: vec!["openssl".into()],
             deny_duplicates: true,
             deny_unknown_sources: false,
+            ..Config::default()
         };
         let pkgs = [
             pkg("a", "1.0.0", Some("MIT")),

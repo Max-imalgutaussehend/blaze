@@ -7,7 +7,8 @@ const COLD: Lane[] = [
   { name: 'Format', them: 'rustfmt', us: 'forge', tThem: R.fmt_rustfmt, tUs: R.fmt_forge_cold, note: `${R.files} files, cold` },
   { name: 'Lint', them: 'clippy (clean build)', us: 'ember', tThem: R.clippy_cold, tUs: R.lint_ember_crate, note: 'one crate, different depth' },
   { name: 'Test', them: 'nextest', us: 'spark', tThem: R.test_nextest, tUs: R.test_spark, note: '147 tests' },
-  { name: 'Deps', them: 'cargo deny', us: 'ward', tThem: R.deny_cargo_deny, tUs: R.deny_ward_cold, note: 'licenses, bans, sources, no cache' },
+  { name: 'Advisories', them: 'cargo deny', us: 'ward', tThem: R.advisories_cargo_deny, tUs: R.advisories_ward, note: 'RustSec, databases warm' },
+  { name: 'Cold build, 2nd project', them: 'cargo build', us: 'blaze (shared target)', tThem: R.coldbuild_cargo_second, tUs: R.coldbuild_blaze_shared_second, note: 'same six dependencies' },
   { name: 'Add 3 crates', them: 'cargo add', us: 'blaze add', tThem: R.add_cargo_3, tUs: R.add_blaze_3, note: 'needs network, warm index cache' },
 ]
 const CACHED: Lane[] = [
@@ -22,6 +23,7 @@ export function Race() {
   const lanes = mode === 'cold' ? COLD : CACHED
   const [t, setT] = useState(0) // seconds elapsed in replay
   const [running, setRunning] = useState(false)
+  const [speed, setSpeed] = useState(4)
   const raf = useRef(0)
   const total = Math.max(...lanes.map((l) => l.tThem))
 
@@ -30,7 +32,7 @@ export function Race() {
     const t0 = performance.now()
     setRunning(true); setT(0)
     const tick = (now: number) => {
-      const s = (now - t0) / 1000
+      const s = ((now - t0) / 1000) * speed
       if (s >= total) { setT(total); setRunning(false); return }
       setT(s); raf.current = requestAnimationFrame(tick)
     }
@@ -46,7 +48,7 @@ export function Race() {
         <Reveal>
           <div className="eyebrow">Speed</div>
           <h2 className="h2">Press play. <span className="grad">Watch it finish.</span></h2>
-          <p className="lede">A real-time replay of the timings from <code>bench/results.json</code>: same clock, same machine, best of three. This is a replay, not a live benchmark.</p>
+          <p className="lede">A replay of the timings from <code>bench/results.json</code>: same machine, best of three (cold builds: best of two). Choose real time or 4× speed. This is a replay, not a live benchmark.</p>
         </Reveal>
         <Reveal delay={0.1}>
           <div className="card" style={{ marginTop: 36, padding: 28 }}>
@@ -56,7 +58,10 @@ export function Race() {
                 <button className={mode === 'cached' ? 'on' : ''} onClick={() => setMode('cached')}>Repeat run</button>
               </div>
               <button className="btn btn-primary" onClick={start} disabled={running}>{running ? 'Running…' : finished ? '↻ Run again' : '▶ Run'}</button>
-              <span className="mono" style={{ marginLeft: 'auto', color: 'var(--ash)', fontSize: 13 }}>t = {(t * 1000).toFixed(0).padStart(4, '0')} ms</span>
+              <div className="tabs" style={{ marginLeft: 'auto' }}>
+                {[1, 4].map((v) => <button key={v} className={speed === v ? 'on' : ''} onClick={() => setSpeed(v)}>{v}× speed</button>)}
+              </div>
+              <span className="mono" style={{ color: 'var(--ash)', fontSize: 13 }}>t = {(t * 1000).toFixed(0).padStart(4, '0')} ms</span>
             </div>
             {lanes.map((l) => (
               <div key={l.name} style={{ margin: '22px 0' }}>

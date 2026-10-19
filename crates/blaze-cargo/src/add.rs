@@ -6,7 +6,7 @@
 //! on the next build.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
@@ -21,6 +21,9 @@ pub struct AddOpts {
     pub features: Vec<String>,
     pub no_default: bool,
     pub optional: bool,
+    /// `-p NAME`: edit that workspace member instead of the current package.
+    pub package: Option<String>,
+    pub manifest_path: Option<PathBuf>,
 }
 
 fn table_for(dev: bool, build: bool) -> &'static str {
@@ -43,6 +46,11 @@ pub fn parse_add(args: &[String]) -> Option<AddOpts> {
         match a.as_str() {
             "-D" | "--dev" => dev = true,
             "-B" | "--build" => build = true,
+            "-p" | "--package" => o.package = Some(it.next()?.clone()),
+            s if s.starts_with("--package=") => {
+                o.package = Some(s["--package=".len()..].to_string());
+            }
+            "--manifest-path" => o.manifest_path = Some(PathBuf::from(it.next()?)),
             "--no-default-features" => o.no_default = true,
             "--optional" => o.optional = true,
             "-F" | "--features" => {
@@ -103,8 +111,8 @@ pub fn index_path(name: &str) -> String {
     match n.len() {
         1 => format!("1/{n}"),
         2 => format!("2/{n}"),
-        3 => format!("3/{}/{n}", & n[..1]),
-        _ => format!("{}/{}/{n}", & n[..2], & n[2..4]),
+        3 => format!("3/{}/{n}", &n[..1]),
+        _ => format!("{}/{}/{n}", &n[..2], &n[2..4]),
     }
 }
 
@@ -302,12 +310,98 @@ pub fn edit_remove(
     Ok((doc.to_string(), found))
 }
 
-fn find_manifest() -> Option<PathBuf> {
-    std::env::current_dir()
-        .ok()?
+/// Expand `[workspace] members` (exact paths and `dir/*` patterns) to manifest paths.
+pub fn workspace_members(root_manifest: &Path) -> Vec<PathBuf> {
+    let Ok(text) = std::fs::read_to_string(root_manifest) else { return Vec::new() };
+    let Ok(doc) = text.parse::<DocumentMut>() else { return Vec::new() };
+    let root = root_manifest.parent().unwrap_or(Path::new("."));
+    let list = |key: &str| -> Vec<String> {
+        doc.get("workspace")
+            .and_then(|w| w.get(key))
+            .and_then(Item::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect()
+    };
+    let exclude = list("exclude");
+    let mut out = Vec::new();
+    for pat in list("members") {
+        let dirs: Vec<PathBuf> = match pat.strip_suffix("/*") {
+            Some(parent) => {
+                std::fs::read_dir(root.join(parent))
+                    .map(|rd| {
+                        rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect()
+                    })
+                    .unwrap_or_default()
+            }
+            None => vec![root.join(&pat)],
+        };
+        for d in dirs {
+            let rel = d.strip_prefix(root).unwrap_or(&d).to_string_lossy().into_owned();
+            if d.join("Cargo.toml").exists() && !exclude.contains(&rel) {
+                out.push(d.join("Cargo.toml"));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+fn package_name(manifest: &Path) -> Option<String> {
+    let doc: DocumentMut = std::fs::read_to_string(manifest).ok()?.parse().ok()?;
+    doc.get("package")?.get("name")?.as_str().map(str::to_string)
+}
+
+/// Decide which `Cargo.toml` an `add`/`remove` should edit.
+pub fn resolve_manifest(
+    package: Option<&str>,
+    manifest_path: Option<&Path>,
+    start: &Path,
+) -> std::result::Result<PathBuf, String> {
+    if let Some(m) = manifest_path {
+        return Ok(m.to_path_buf());
+    }
+    let near = start
         .ancestors()
         .map(|d| d.join("Cargo.toml"))
         .find(|p| p.exists())
+        .ok_or("could not find Cargo.toml in this directory or any parent")?;
+    let is_virtual = |m: &Path| {
+        std::fs::read_to_string(m)
+            .ok()
+            .and_then(|t| t.parse::<DocumentMut>().ok())
+            .is_some_and(|d| !d.contains_key("package"))
+    };
+    match package {
+        Some(name) => {
+            if package_name(&near).as_deref() == Some(name) {
+                return Ok(near);
+            }
+            // look in the workspace that contains this directory
+            let root = start
+                .ancestors()
+                .map(|d| d.join("Cargo.toml"))
+                .filter(|p| p.exists())
+                .find(|p| {
+                    std::fs::read_to_string(p).is_ok_and(|t| t.contains("[workspace]"))
+                });
+            root.iter()
+                .flat_map(|r| workspace_members(r).into_iter().chain([r.clone()]))
+                .find(|m| package_name(m).as_deref() == Some(name))
+                .ok_or_else(|| format!(
+                    "package `{name}` not found in the workspace",
+                ))
+        }
+        None if is_virtual(&near) => {
+            Err(
+                "could not determine which package to modify; use `-p <package>` (the current manifest is a virtual workspace)"
+                    .into(),
+            )
+        }
+        None => Ok(near),
+    }
 }
 
 fn forward(sub: &str, args: &[String]) -> Result<i32> {
@@ -323,14 +417,19 @@ fn forward(sub: &str, args: &[String]) -> Result<i32> {
 }
 
 pub fn add(args: &[String]) -> Result<i32> {
-    let (Some(opts), Some(manifest)) = (parse_add(args), find_manifest()) else {
-        return forward("add", args)
+    let Some(opts) = parse_add(args) else { return forward("add", args) };
+    let manifest = match resolve_manifest(
+        opts.package.as_deref(),
+        opts.manifest_path.as_deref(),
+        &std::env::current_dir()?,
+    ) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return Ok(1);
+        }
     };
     let text = std::fs::read_to_string(&manifest)?;
-    // virtual workspaces need `-p`; let cargo handle them
-    if !text.parse::<DocumentMut>().is_ok_and(|d| d.contains_key("package")) {
-        return forward("add", args);
-    }
     let resolved: Vec<Result<Resolved>> = std::thread::scope(|s| {
         let hs: Vec<_> = opts
             .crates
@@ -357,7 +456,7 @@ pub fn add(args: &[String]) -> Result<i32> {
         {
             eprintln!(
                 "error: unrecognized feature `{bad}` for crate `{name}`\navailable features: {}",
-                r.valid_features.iter().cloned().collect::< Vec < _ >> ().join(", ")
+                r.valid_features.iter().cloned().collect::<Vec<_>>().join(", "),
             );
             return Ok(1);
         }
@@ -383,17 +482,32 @@ pub fn add(args: &[String]) -> Result<i32> {
 
 pub fn remove(args: &[String]) -> Result<i32> {
     let (mut dev, mut build) = (false, false);
+    let (mut package, mut manifest_path) = (None, None);
     let mut names = Vec::new();
-    for a in args {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
         match a.as_str() {
             "-D" | "--dev" => dev = true,
             "-B" | "--build" => build = true,
+            "-p" | "--package" => package = it.next().cloned(),
+            "--manifest-path" => manifest_path = it.next().map(PathBuf::from),
             s if s.starts_with('-') => return forward("remove", args),
             s => names.push(s.to_string()),
         }
     }
-    let Some(manifest) = find_manifest().filter(|_| !names.is_empty()) else {
-        return forward("remove", args)
+    if names.is_empty() {
+        return forward("remove", args);
+    }
+    let manifest = match resolve_manifest(
+        package.as_deref(),
+        manifest_path.as_deref(),
+        &std::env::current_dir()?,
+    ) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return Ok(1);
+        }
     };
     let tables: Vec<&str> = if dev || build {
         vec![table_for(dev, build)]
@@ -405,8 +519,8 @@ pub fn remove(args: &[String]) -> Result<i32> {
         let (t, found) = edit_remove(&text, n, &tables)?;
         if found.is_empty() {
             eprintln!(
-                "error: the dependency `{n}` could not be found in {}", tables
-                .join(" or ")
+                "error: the dependency `{n}` could not be found in {}",
+                tables.join(" or "),
             );
             return Ok(1);
         }
@@ -440,15 +554,17 @@ mod tests {
         let o = parse_add(&args(&["serde@1", "-F", "derive,rc", "--optional", "tokio"]))
             .unwrap();
         assert_eq!(
-            o.crates, [("serde".into(), Some("1".into())), ("tokio".into(), None)]
+            o.crates,
+            [("serde".into(), Some("1".into())), ("tokio".into(), None)],
         );
         assert_eq!(o.features, ["derive", "rc"]);
         assert!(o.optional);
         assert_eq!(
-            parse_add(& args(& ["x", "--dev"])).unwrap().table, "dev-dependencies"
+            parse_add(&args(&["x", "--dev"])).unwrap().table,
+            "dev-dependencies",
         );
-        assert!(parse_add(& args(& ["x", "--git", "u"])).is_none());
-        assert!(parse_add(& args(& [])).is_none());
+        assert!(parse_add(&args(&["x", "--git", "u"])).is_none());
+        assert!(parse_add(&args(&[])).is_none());
     }
 
     const MANIFEST: &str = "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n# keep me\n[dependencies]\nanyhow = \"1\"\nzzz = \"2\"\n";
@@ -465,6 +581,49 @@ mod tests {
     }
 
     #[test]
+    fn workspace_member_resolution() {
+        let root = std::env::temp_dir()
+            .join(format!("blaze-ws-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (dir, name) in [
+            ("crates/a", "alpha"),
+            ("crates/b", "beta"),
+            ("tools/c", "gamma"),
+        ] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+            std::fs::write(
+                    root.join(dir).join("Cargo.toml"),
+                    format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n"),
+                )
+                .unwrap();
+        }
+        std::fs::write(
+                root.join("Cargo.toml"),
+                "[workspace]\nmembers = [\"crates/*\", \"tools/c\"]\nexclude = [\"crates/b\"]\n",
+            )
+            .unwrap();
+        let members = workspace_members(&root.join("Cargo.toml"));
+        assert_eq!(members.len(), 2, "{members:?}");
+        // a virtual root without -p is an error; with -p the member is found from anywhere
+        assert!(resolve_manifest(None, None, &root).unwrap_err().contains("-p"));
+        assert_eq!(
+            resolve_manifest(Some("gamma"), None, &root).unwrap(),
+            root.join("tools/c/Cargo.toml"),
+        );
+        assert_eq!(
+            resolve_manifest(Some("alpha"), None, &root.join("tools/c")).unwrap(),
+            root.join("crates/a/Cargo.toml"),
+        );
+        assert!(resolve_manifest(Some("beta"), None, &root).is_err()); // excluded
+        // inside a member, no -p is needed
+        assert_eq!(
+            resolve_manifest(None, None, &root.join("crates/a")).unwrap(),
+            root.join("crates/a/Cargo.toml"),
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn add_keeps_comments_and_sort_order() {
         let out = edit_add(MANIFEST, &spec("serde", &["derive"])).unwrap();
         assert!(out.contains("# keep me"));
@@ -474,7 +633,7 @@ mod tests {
         assert!(a < s && s < z, "{out}");
         assert!(
             out.contains("serde = { version = \"1.0.0\", features = [\"derive\"] }"),
-            "{out}"
+            "{out}",
         );
     }
 
@@ -494,7 +653,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(found, ["dependencies"]);
-        assert!(! out.contains("zzz") && out.contains("anyhow"));
-        assert!(edit_remove(MANIFEST, "nope", & ["dependencies"]).unwrap().1.is_empty());
+        assert!(!out.contains("zzz") && out.contains("anyhow"));
+        assert!(
+            edit_remove(MANIFEST, "nope", &["dependencies"]).unwrap().1.is_empty(),
+        );
     }
 }

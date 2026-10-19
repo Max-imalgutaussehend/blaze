@@ -20,6 +20,24 @@ fn text_at<'a>(t: &[Token], s: &'a str, i: usize) -> &'a str {
     t.get(i).map_or("", |x| x.text(s))
 }
 
+/// If the punctuation tokens starting at `from` concatenate exactly to `want`, return how many.
+fn punct_run(t: &[Token], s: &str, from: usize, want: &str) -> Option<usize> {
+    let mut acc = String::new();
+    for (k, tok) in t.iter().enumerate().skip(from) {
+        if tok.kind != Kind::Punct || acc.len() >= want.len() {
+            break;
+        }
+        acc.push_str(tok.text(s));
+        if acc == want {
+            return Some(k - from + 1);
+        }
+        if !want.starts_with(&acc) {
+            break;
+        }
+    }
+    None
+}
+
 /// Maps each original code token to a formatted code token index.
 fn align(o: &[Token], os: &str, f: &[Token], fs: &str) -> Option<Vec<usize>> {
     let (mut i, mut j) = (0, 0);
@@ -27,10 +45,17 @@ fn align(o: &[Token], os: &str, f: &[Token], fs: &str) -> Option<Vec<usize>> {
     while i < o.len() {
         let Some(ft) = f.get(j) else {
             // formatted ran out: only removable tokens may remain
-            if matches!(text(& o[i], os), "," | "(" | ")" | "{" | "}") {
+            if matches!(text(& o[i], os), "," | "(" | ")" | "{" | "}" | ";") {
                 map[i] = f.len().saturating_sub(1);
                 i += 1;
                 continue;
+            }
+            if std::env::var_os("FORGE_DEBUG").is_some() {
+                eprintln!(
+                    "align mismatch: formatted text ended, orig line {} `{}` left over",
+                    o[i].line,
+                    text(&o[i], os),
+                );
             }
             return None;
         };
@@ -67,6 +92,23 @@ fn align(o: &[Token], os: &str, f: &[Token], fs: &str) -> Option<Vec<usize>> {
             }
         }
         let (a, b) = (text(&o[i], os), text(ft, fs));
+        // the same punctuation split differently, e.g. `=>` vs `=` `>`
+        if a != b && o[i].kind == Kind::Punct && ft.kind == Kind::Punct {
+            if let Some(k) = punct_run(f, fs, j, a) {
+                map[i] = j;
+                i += 1;
+                j += k;
+                continue;
+            }
+            if let Some(k) = punct_run(o, os, i, b) {
+                for m in &mut map[i..i + k] {
+                    *m = j;
+                }
+                i += k;
+                j += 1;
+                continue;
+            }
+        }
         let both_doc = o[i].kind == Kind::DocComment && ft.kind == Kind::DocComment;
         if a == b || both_doc {
             map[i] = j;
@@ -80,8 +122,9 @@ fn align(o: &[Token], os: &str, f: &[Token], fs: &str) -> Option<Vec<usize>> {
         } else {
             if std::env::var_os("FORGE_DEBUG").is_some() {
                 eprintln!(
-                    "align mismatch: orig line {} `{a}` vs fmt line {} `{b}`", o[i].line,
-                    ft.line
+                    "align mismatch: orig line {} `{a}` vs fmt line {} `{b}`",
+                    o[i].line,
+                    ft.line,
                 );
             }
             return None;
@@ -96,7 +139,15 @@ struct Insert {
 }
 
 pub fn reattach(orig: &str, formatted: &str) -> Option<String> {
-    reattach_dbg(orig, formatted).ok()
+    match reattach_dbg(orig, formatted) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            if std::env::var_os("FORGE_DEBUG").is_some() {
+                eprintln!("reattach failed: {e}");
+            }
+            None
+        }
+    }
 }
 
 pub fn reattach_dbg(orig: &str, formatted: &str) -> Result<String, String> {
@@ -193,24 +244,53 @@ pub fn reattach_dbg(orig: &str, formatted: &str) -> Result<String, String> {
             out.push(String::new());
         }
     };
-    for (ln, line) in f_lines.iter().enumerate() {
+    // Indentation for a comment placed in front of formatted line `ln`: that line's indent, or one
+    // level deeper when the line starts with a closing delimiter (the comment belongs to the block).
+    let comment_indent = |ln: usize| -> String {
+        let line = f_lines.get(ln).copied().unwrap_or("");
         let indent: String = line.chars().take_while(|c| *c == ' ').collect();
+        if line.trim_start().starts_with(['}', ')', ']']) {
+            format!("{indent}    ")
+        } else {
+            indent
+        }
+    };
+    for (ln, line) in f_lines.iter().enumerate() {
         for ins in &before[ln] {
             if ins.blank {
                 push_blank(&mut out);
             }
-            out.push(format!("{indent}{}", ins.text));
+            out.push(format!("{}{}", comment_indent(ln), ins.text));
         }
         let trimmed = line.trim_start();
         if blank_code[ln] && !trimmed.starts_with(['}', ')', ']']) {
             push_blank(&mut out);
         }
         let mut l = (*line).to_string();
+        // A `//` comment runs to the end of the line, so once one is placed inline, further
+        // trailing comments of this line move to their own lines right below it.
+        let mut extra: Vec<&String> = Vec::new();
+        let mut line_open = true;
         for c in &after[ln] {
-            l.push(' ');
-            l.push_str(c);
+            if line_open {
+                l.push(' ');
+                l.push_str(c);
+                line_open = !c.starts_with("//");
+            } else {
+                extra.push(c);
+            }
         }
         out.push(l);
+        if !extra.is_empty() {
+            // like an own-line comment, attach to the next non-empty formatted line
+            let next = (ln + 1..f_lines.len())
+                .find(|&n| !f_lines[n].trim().is_empty())
+                .unwrap_or(ln);
+            let ind = comment_indent(next);
+            for c in extra {
+                out.push(format!("{ind}{c}"));
+            }
+        }
     }
     // formatted text ends with "\n" so the last element is empty: put EOF comments before it
     if !trailing_eof.is_empty() {
@@ -233,15 +313,42 @@ pub fn reattach_dbg(orig: &str, formatted: &str) -> Result<String, String> {
     let mut comments = orig_comments.iter();
     for t in &rt {
         if is_comment(t.kind) {
-            if comments.next().map(String::as_str) != Some(text(t, &result)) {
+            let want = comments.next().map(String::as_str);
+            if want != Some(text(t, &result)) {
+                debug_mismatch(
+                    "comment",
+                    t.line,
+                    want.unwrap_or("<none>"),
+                    text(t, &result),
+                );
                 return Err("verify".into());
             }
-        } else if expected.next().map(|f| text(f, formatted)) != Some(text(t, &result)) {
-            return Err("verify".into());
+        } else {
+            let want = expected.next().map(|f| text(f, formatted));
+            if want != Some(text(t, &result)) {
+                debug_mismatch(
+                    "code",
+                    t.line,
+                    want.unwrap_or("<none>"),
+                    text(t, &result),
+                );
+                return Err("verify".into());
+            }
         }
     }
     if expected.next().is_some() || comments.next().is_some() {
         return Err("verify".into());
     }
     Ok(result)
+}
+
+fn debug_mismatch(kind: &str, line: u32, want: &str, got: &str) {
+    if std::env::var_os("FORGE_DEBUG").is_some() {
+        let cut = |s: &str| s.chars().take(40).collect::<String>();
+        eprintln!(
+            "verify mismatch ({kind}) at result line {line}: want `{}` got `{}`",
+            cut(want),
+            cut(got),
+        );
+    }
 }

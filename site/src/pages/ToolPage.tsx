@@ -10,6 +10,7 @@ import { Playground } from '../sections/Playground'
 import { Terminal, type Line } from '../sections/Terminal'
 import { Reveal } from '../sections/Reveal'
 import { ToolCard } from '../sections/Tools'
+import { RulesTable } from '../sections/RulesTable'
 import { TOOLS, fmtT, logo, tool, type ToolId } from '../lib/blaze'
 import { useSpot } from '../lib/hooks'
 
@@ -105,6 +106,7 @@ export function ToolPage({ id }: { id: string }) {
         </div>
       </Section>
 
+      {t.id === 'ember' && <RulesTable />}
       {(t.id === 'ember' || t.id === 'forge') && (
         <Playground only={t.id === 'ember' ? 'lint' : 'fmt'} id="demo" />
       )}

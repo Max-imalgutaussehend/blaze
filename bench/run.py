@@ -99,5 +99,22 @@ r["add_cargo_1"] = add_time(["cargo", "add"], ["cargo", "remove"], ["anyhow"])
 r["add_blaze_1"] = add_time([blaze, "add"], [blaze, "remove"], ["anyhow"])
 r["add_cargo_3"] = add_time(["cargo", "add"], ["cargo", "remove"], ["anyhow", "rayon", "clap"], n=3)
 r["add_blaze_3"] = add_time([blaze, "add"], [blaze, "remove"], ["anyhow", "rayon", "clap"], n=3)
+
+# advisories: a project with a known-vulnerable dependency (time 0.1.43, RUSTSEC-2020-0071)
+vuln = os.path.join(tempfile.mkdtemp(), "vuln")
+subprocess.run(["cargo", "new", "--vcs", "none", "-q", vuln], capture_output=True)
+open(os.path.join(vuln, "Cargo.toml"), "a").write("\n[workspace]\n")
+subprocess.run([blaze, "add", "time@=0.1.43"], cwd=vuln, capture_output=True)
+subprocess.run(["cargo", "check", "-q"], cwd=vuln, capture_output=True)
+open(os.path.join(vuln, "deny.toml"), "w").write("[advisories]\nversion = 2\n")
+subprocess.run(["cargo", "deny", "check", "advisories"], cwd=vuln, capture_output=True)  # fetch its database once
+subprocess.run([os.path.join(BIN, "ward")], cwd=vuln, capture_output=True)  # and ours
+r["advisories_cargo_deny"] = timed(["cargo", "deny", "check", "advisories"], vuln, n=3)
+r["advisories_ward"] = timed([os.path.join(BIN, "ward")], vuln, n=5)
+
+# cold build of a second project (separate script, repeated because it is slow and noisy)
+sys.path.insert(0, HERE)
+import coldbuild
+r.update(coldbuild.measure(2))
 json.dump(r, open(os.path.join(HERE, "results.json"), "w"), indent=2)
 print(json.dumps(r, indent=2))

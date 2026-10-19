@@ -3,18 +3,15 @@
 # Blaze
 
 A faster way to use cargo, plus a linter, formatter, test runner and dependency checker in one toolchain.
-Docs, per-tool pages and benchmarks: https://max-imalgutaussehend.github.io/blaze/
-
-> **Status: alpha.** Fast and usable, but not a drop-in replacement for cargo, clippy or rustfmt yet.
-> 1.0 will be released once Blaze is a better tool, not only a faster one (see "Road to 1.0").
+Docs, one page per tool, and benchmarks: https://max-imalgutaussehend.github.io/blaze/
 
 | Tool | What it does |
 |---|---|
-| <img src="brand/blaze.svg" width="18"> `blaze` | `build`, `check`, `run` skip cargo when nothing changed; `add`/`remove` edit `Cargo.toml` directly; everything else goes to cargo |
-| <img src="brand/ember.svg" width="18"> `ember` | token-level linter, 6 rules (unwrap, dbg!, todo!, len() == 0, needless return, bool comparison), parallel, no compile step |
-| <img src="brand/forge.svg" width="18"> `forge` | formats Rust, keeps comments and blank lines, verified output, skips unchanged files by stat |
-| <img src="brand/spark.svg" width="18"> `spark` | process per test (or `--shared`), one worker pool, optional cache of passed tests |
-| <img src="brand/ward.svg" width="18"> `ward` | license expressions, bans, duplicate versions, sources, read straight from `Cargo.lock` |
+| <img src="brand/blaze.svg" width="18"> `blaze` | `build`, `check`, `run` skip cargo when nothing changed; `add`/`remove` edit `Cargo.toml` (workspace-aware); optional shared target directory; everything else goes to cargo |
+| <img src="brand/ember.svg" width="18"> `ember` | token-level linter with 31 rules, safe and unsafe autofixes, `--select`/`--ignore`, JSON output, `--deep` to add clippy |
+| <img src="brand/forge.svg" width="18"> `forge` | formats Rust, keeps comments and blank lines, formats macro arguments, idempotent, verified output |
+| <img src="brand/spark.svg" width="18"> `spark` | process per test or `--shared`, retries, timeouts, JUnit, doc-tests, optional result cache |
+| <img src="brand/ward.svg" width="18"> `ward` | RustSec advisories, license expressions, bans, duplicates, sources, read straight from `Cargo.lock` |
 
 ```sh
 curl -LsSf https://github.com/Max-imalgutaussehend/blaze/releases/latest/download/install.sh | sh
@@ -22,33 +19,52 @@ blaze build && blaze run
 blaze ci          # forge --check + ember + ward
 ```
 
+## What 1.0 means
+Blaze 1.0 is a toolchain with its own, stable scope, not a drop-in clone of the tools it is compared with:
+
+- **ember is a syntactic linter.** It has no type information, so it cannot do clippy's type-aware lints.
+  `ember --deep` runs `cargo clippy` after its own pass. Fixes that depend on types are "unsafe" and need
+  `--unsafe-fixes`.
+- **forge has one fixed style**, which is not rustfmt's. Adopting it in a rustfmt codebase produces a one-time diff.
+  It never rewrites a file it cannot prove safe (about 1 in 150 files in our corpus are skipped and reported).
+- **blaze does not replace cargo's resolver or compiler orchestration.** It removes the fixed cost of cargo
+  commands when nothing changed, and (opt-in) shares compiled dependencies between projects.
+
 ## Measured results
 Reproduce with `cargo build --release && python3 bench/run.py <corpus> <crate>`; the website renders
-`bench/results.json`. On the machine in that file:
+`bench/results.json`. Best of three on an 8-core arm64 Mac (the machine was under load from other
+processes; every pair was measured back to back):
 
 | | incumbent | blaze | |
 |---|---|---|---|
-| build, nothing changed (about 170 crates) | cargo 333 ms | 3.5 ms | 95x |
-| run, nothing changed | cargo 354 ms | 7.4 ms | 48x |
-| add 3 crates | cargo 657 ms | 74 ms | 8.9x |
-| format 2000 files, cold | rustfmt 5.3 s | forge 0.70 s | 7.7x |
-| format 2000 files, repeat run | rustfmt 5.3 s | forge 27 ms | 200x |
-| tests (147), cold | nextest 755 ms | spark 454 ms | 1.7x |
-| tests, `--cached` | nextest 755 ms | spark 42 ms | 18x |
-| dependency policy, no cache | cargo deny 224 ms | ward 11.7 ms | 19x |
-| lint one crate | clippy 1.01 s (clean build) | ember 8.3 ms | 121x |
+| build, nothing changed (about 170 crates) | cargo 443 ms | 7.5 ms | 59x |
+| check, nothing changed | cargo 366 ms | 5.5 ms | 67x |
+| run, nothing changed | cargo 501 ms | 10.4 ms | 48x |
+| add 3 crates | cargo 791 ms | 106 ms | 7.5x |
+| cold build of a 2nd project, shared target | cargo 11.8 s | 0.77 s | 15x |
+| format 2000 files, cold | rustfmt 9.3 s | forge 1.06 s | 8.8x |
+| format 2000 files, repeat run | rustfmt 9.3 s | forge 38 ms | 246x |
+| tests (147), cold | nextest 957 ms | spark 561 ms | 1.7x |
+| tests, `--shared` | nextest 957 ms | spark 433 ms | 2.2x |
+| tests, `--cached` | nextest 957 ms | spark 68 ms | 14x |
+| RustSec advisories | cargo deny 1.13 s | ward 5.8 ms | 194x |
+| licenses, bans, sources, no cache | cargo deny 368 ms | ward 17.7 ms | 21x |
+| lint one crate | clippy 1.62 s (clean build) | ember 17.5 ms | 93x |
 
-Caveats: ember is far smaller than clippy and compares speed only; forge's style is not rustfmt's;
-"nothing changed" figures describe the common edit-run loop, not a first build, where blaze is exactly as
-fast as cargo because it runs cargo.
+Caveats: the first build of a project is a cargo build; ember's comparison is speed only (clippy checks far
+more); forge's style differs from rustfmt's; "nothing changed" and "repeat run" figures describe the common
+edit-run loop, not a first run.
 
-## Road to 1.0
-Type-aware lints and autofix (ember), rustfmt-compatible style (forge), RustSec advisories (ward),
-doc-tests and retries (spark), workspace-aware `add -p` and a fast path for more build flags (blaze).
+## Quality gates
+- forge on 6,000 real files: 99.3% formatted, 0 changed on a second pass, the rest skipped and reported
+  (`cargo run --release -p blaze-forge --example eval -- <file list>`).
+- ember's autofix on 6,000 real files: 0 files that parsed before fail to parse after, 0 non-idempotent; safe
+  fixes applied to real crates all recompile (`--example fixcheck`).
+- Every tool has unit tests; `blaze ci` runs on this repository in CI.
 
 ## Website & playground
-`site/` is a Vite + React + Tailwind app. The playground runs the real ember and forge compiled to
-WebAssembly (`crates/blaze-wasm`). Build: `site/scripts/build-wasm.sh && cd site && npm ci && npm run build`.
+`site/` is a Vite + React + Tailwind app with one page per tool. The playground runs the real ember and forge
+compiled to WebAssembly (`crates/blaze-wasm`). Build: `site/scripts/build-wasm.sh && cd site && npm ci && npm run build`.
 Logos are generated by `brand/make_logos.py`: a Rust-style cog ring with rivets and a tool glyph in the hub.
 
 License: Apache-2.0 (see `LICENSE`; third-party notices in `THIRD_PARTY_NOTICES.md`).

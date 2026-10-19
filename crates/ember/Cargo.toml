@@ -8,3 +8,6 @@ description = "Ember: an extremely fast Rust linter"
 [dependencies]
 blaze-lexer.workspace = true
 rayon.workspace = true
+
+[dev-dependencies]
+syn.workspace = true

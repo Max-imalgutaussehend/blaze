@@ -78,10 +78,22 @@ fn main() -> ExitCode {
                         &EmberArgs {
                             paths: vec![".".into()],
                             rules: false,
+                            select: vec![],
                             ignore: vec![],
+                            fix: false,
+                            unsafe_fixes: false,
+                            format: "text".into(),
+                            deep: false,
                         },
                     )?;
-                    let w = blaze::ward(&WardArgs {})?;
+                    let w = blaze::ward(
+                        &WardArgs {
+                            offline: false,
+                            update: false,
+                            no_advisories: false,
+                            strict: false,
+                        },
+                    )?;
                     Ok(f && e && w)
                 })(),
             )

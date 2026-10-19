@@ -11,6 +11,7 @@ use blaze_core::{Cache, Stamp, hash_bytes};
 use blaze_lexer::{Kind, lex};
 use rayon::prelude::*;
 
+mod macros;
 pub mod reattach;
 
 #[derive(Debug, Default)]
@@ -37,11 +38,14 @@ pub enum FormatError {
 const CHUNK_MIN: usize = 192 * 1024;
 const CHUNK_TARGET: usize = 96 * 1024;
 
-fn unparse_whole(src: &str) -> Result<String, FormatError> {
-    let file = syn::parse_file(src).map_err(|e| FormatError::Syntax(e.to_string()))?;
+fn unparse_whole(src: &str) -> Result<(String, bool), FormatError> {
+    let mut file = syn::parse_file(src).map_err(|e| FormatError::Syntax(e.to_string()))?;
+    // A user identifier that looks like our marker would be rewritten by `restore`; skip then.
+    let rewritten = !src.contains("__bm_") && macros::rewrite(&mut file);
     // prettyplease panics (`not implemented`) on syntax it cannot print, e.g. unstable items.
-    std::panic::catch_unwind(|| prettyplease::unparse(&file))
-        .map_err(|_| FormatError::Unsupported("syntax the printer does not support"))
+    let text = std::panic::catch_unwind(|| prettyplease::unparse(&file))
+        .map_err(|_| FormatError::Unsupported("syntax the printer does not support"))?;
+    Ok((if rewritten { macros::restore(&text) } else { text }, rewritten))
 }
 
 /// Byte offsets just after top-level items, roughly `CHUNK_TARGET` apart.
@@ -87,7 +91,7 @@ pub fn split_points(src: &str) -> Vec<usize> {
     cuts
 }
 
-fn unparse_chunked(src: &str) -> Result<String, FormatError> {
+fn unparse_chunked(src: &str) -> Result<(String, bool), FormatError> {
     let cuts = split_points(src);
     if cuts.is_empty() {
         return unparse_whole(src);
@@ -95,7 +99,7 @@ fn unparse_chunked(src: &str) -> Result<String, FormatError> {
     let mut bounds = vec![0];
     bounds.extend(cuts);
     bounds.push(src.len());
-    let parts: Vec<Result<String, FormatError>> = bounds
+    let parts: Vec<Result<(String, bool), FormatError>> = bounds
         .windows(2)
         .collect::<Vec<_>>()
         .par_iter()
@@ -103,23 +107,69 @@ fn unparse_chunked(src: &str) -> Result<String, FormatError> {
         .collect();
     // any failure: fall back to the authoritative whole-file path (and its error reporting)
     let mut out = String::with_capacity(src.len());
+    let mut rewritten = false;
     for p in parts {
         match p {
-            Ok(s) => out.push_str(&s),
+            Ok((s, r)) => {
+                out.push_str(&s);
+                rewritten |= r;
+            }
             Err(_) => return unparse_whole(src),
         }
     }
-    Ok(out)
+    Ok((out, rewritten))
 }
 
-pub fn format_source(src: &str) -> Result<String, FormatError> {
-    let formatted = if src.len() >= CHUNK_MIN {
+/// One formatting pass. The flag says whether macro calls were rewritten, which (like margin
+/// overflow) can make prettyplease's layout differ between consecutive passes.
+fn format_once(src: &str) -> Result<(String, bool), FormatError> {
+    let (formatted, rewritten) = if src.len() >= CHUNK_MIN {
         unparse_chunked(src)?
     } else {
         unparse_whole(src)?
     };
-    reattach::reattach(src, &formatted)
-        .ok_or(FormatError::Unsupported("could not safely preserve comments"))
+    let out = reattach::reattach(src, &formatted)
+        .ok_or(FormatError::Unsupported("could not safely preserve comments"))?;
+    Ok((out, rewritten))
+}
+
+/// prettyplease's own margin; a code line wider than this means its printer overflowed.
+const MARGIN: usize = 89;
+
+/// True when some non-comment line is wider than the printer margin.
+fn has_overflow(text: &str) -> bool {
+    text.lines().any(|l| l.chars().count() > MARGIN && !l.trim_start().starts_with("//"))
+}
+
+/// Format `src`. prettyplease is not idempotent for some constructs (for example match arms with
+/// guards sitting right at the margin), so when the output overflows the margin we format again,
+/// up to three passes, until the text no longer changes. This makes `format(format(x)) == format(x)`.
+pub fn format_source(src: &str) -> Result<String, FormatError> {
+    format_with(src, true)
+}
+
+/// Single pass, for `--check`: all that matters there is whether the file would change, and a
+/// second pass would only double the cost of every unformatted file.
+pub fn format_source_once(src: &str) -> Result<String, FormatError> {
+    format_with(src, false)
+}
+
+fn format_with(src: &str, to_fixed_point: bool) -> Result<String, FormatError> {
+    let (mut out, rewritten) = format_once(src)?;
+    if !to_fixed_point {
+        return Ok(out);
+    }
+    for _ in 0..2 {
+        if !rewritten && !has_overflow(&out) {
+            break;
+        }
+        let (next, _) = format_once(&out)?;
+        if next == out {
+            break;
+        }
+        out = next;
+    }
+    Ok(out)
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -192,7 +242,7 @@ fn process(path: &Path, check: bool, cache: &Cache) -> Result<Outcome, String> {
         });
     }
     let src = String::from_utf8(bytes).map_err(|e| e.to_string())?;
-    let out = match format_source(&src) {
+    let out = match if check { format_source_once(&src) } else { format_source(&src) } {
         Ok(o) => o,
         Err(FormatError::Unsupported(_)) => {
             return Ok(Outcome {
@@ -297,6 +347,21 @@ mod tests {
     }
 
     #[test]
+    fn match_arm_with_guard_at_the_margin_is_idempotent() {
+        let src = "fn f(arg: A) -> bool {\n    match arg {\n        GenericArgument::Lifetime(lifetime) if lifetime.ident != \"static\" => {\n            return true;\n        }\n        _ => {}\n    }\n    false\n}\n";
+        let once = format_source(src).unwrap();
+        assert_eq!(format_source(& once).unwrap(), once);
+    }
+
+    #[test]
+    fn comment_before_closing_brace_stays_inside_the_block() {
+        let src = "fn f() {\n    let a = 1;\n    // last note\n}\n";
+        let out = format_source(src).unwrap();
+        assert_eq!(out, "fn f() {\n    let a = 1;\n    // last note\n}\n");
+        assert_eq!(format_source(& out).unwrap(), out);
+    }
+
+    #[test]
     fn preserves_comments_and_blank_lines() {
         let src = "// head\nfn  main(){\n    let x=1; // one\n\n    // about y\n    let y=2;\n}\n";
         let out = format_source(src).unwrap();
@@ -345,7 +410,7 @@ mod tests {
         let src = big_source();
         assert!(src.len() > CHUNK_MIN, "test source must exceed the chunking threshold");
         assert!(! split_points(& src).is_empty());
-        let whole = reattach::reattach(&src, &unparse_whole(&src).unwrap());
+        let whole = reattach::reattach(&src, &unparse_whole(&src).unwrap().0);
         let chunked = format_source(&src).ok();
         assert!(whole.is_some() && whole == chunked);
     }

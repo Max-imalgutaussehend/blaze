@@ -179,15 +179,16 @@ mod tests {
     use super::*;
     #[test]
     fn reads_config_lists() {
-        let dir = std::env::temp_dir().join(format!("blaze-cfg-{}", std::process::id()));
+        let dir = std::env::temp_dir()
+            .join(format!("blaze-cfg-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
                 dir.join("blaze.toml"),
                 "[ember]\nignore = [\"B001\", \"B006\"]\n",
             )
             .unwrap();
-        assert_eq!(config_strings(& dir, "ember", "ignore"), ["B001", "B006"]);
-        assert!(config_strings(& dir, "ember", "nope").is_empty());
+        assert_eq!(config_strings(&dir, "ember", "ignore"), ["B001", "B006"]);
+        assert!(config_strings(&dir, "ember", "nope").is_empty());
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -199,8 +200,8 @@ mod tests {
         let mut c = Cache::load(&dir, "t", "v1");
         c.mark_clean(f, "h".into());
         c.save().unwrap();
-        assert!(Cache::load(& dir, "t", "v1").is_clean(f, "h"));
-        assert!(! Cache::load(& dir, "t", "v2").is_clean(f, "h"));
+        assert!(Cache::load(&dir, "t", "v1").is_clean(f, "h"));
+        assert!(!Cache::load(&dir, "t", "v2").is_clean(f, "h"));
         std::fs::remove_dir_all(dir).ok();
     }
 }

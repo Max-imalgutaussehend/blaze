@@ -4,6 +4,7 @@ use anyhow::{Context, Result, bail};
 use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -12,13 +13,30 @@ pub struct TestBinary {
     pub package_dir: PathBuf,
     pub label: String,
 }
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Outcome {
     pub label: String,
     pub name: String,
     pub passed: bool,
     pub duration: Duration,
     pub output: String,
+    /// Passed, but only after at least one failed attempt (see `Options::retries`).
+    pub flaky: bool,
+    /// Retries that were needed (0 when the first attempt decided).
+    pub retries_used: u32,
+    pub timed_out: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Options {
+    /// Skip tests that passed before against a byte-identical binary.
+    pub cached: bool,
+    /// One process per binary instead of one per test.
+    pub shared: bool,
+    /// Re-run a failing test up to this many times; a pass on a retry is reported as flaky.
+    pub retries: u32,
+    /// Kill a test that runs longer than this (isolated mode only).
+    pub timeout: Option<Duration>,
 }
 /// Build all test binaries via cargo and return them.
 pub fn build(root: &Path, extra_args: &[String]) -> Result<Vec<TestBinary>> {
@@ -76,8 +94,9 @@ pub fn build(root: &Path, extra_args: &[String]) -> Result<Vec<TestBinary>> {
     }
     if std::env::var_os("SPARK_TIMINGS").is_some() {
         eprintln!(
-            "spark timing: cargo build check {:?} ({} binaries)", t0.elapsed(), bins
-            .len()
+            "spark timing: cargo build check {:?} ({} binaries)",
+            t0.elapsed(),
+            bins.len(),
         );
     }
     Ok(bins)
@@ -93,34 +112,78 @@ fn list_tests(bin: &TestBinary) -> Result<Vec<String>> {
 pub fn parse_list(stdout: &str) -> Vec<String> {
     stdout.lines().filter_map(|l| l.strip_suffix(": test")).map(str::to_string).collect()
 }
-fn run_one(bin: &TestBinary, name: &str) -> Outcome {
-    let start = Instant::now();
-    let res = Command::new(&bin.exe)
-        .args(["--exact", name, "--nocapture", "--test-threads=1"])
-        .current_dir(&bin.package_dir)
-        .env("CARGO_MANIFEST_DIR", &bin.package_dir)
-        .output();
-    let duration = start.elapsed();
-    let (passed, output) = match res {
-        Ok(o) => {
-            (
-                o.status.success(),
-                format!(
-                    "{}{}", String::from_utf8_lossy(& o.stdout),
-                    String::from_utf8_lossy(& o.stderr)
-                ),
-            )
-        }
-        Err(e) => (false, e.to_string()),
+/// Run `cmd`, capture stdout+stderr, and kill it when `timeout` expires.
+/// Returns `(success, output, timed_out)`.
+fn run_captured(
+    cmd: &mut Command,
+    timeout: Option<Duration>,
+) -> std::io::Result<(bool, String, bool)> {
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn()?;
+    let drain = |mut r: Box<dyn Read + Send>| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = r.read_to_end(&mut buf);
+            buf
+        })
     };
+    let out = child.stdout.take().map(|o| drain(Box::new(o)));
+    let err = child.stderr.take().map(|e| drain(Box::new(e)));
+    let (success, timed_out) = match timeout {
+        None => (child.wait()?.success(), false),
+        Some(limit) => {
+            let deadline = Instant::now() + limit;
+            loop {
+                if let Some(status) = child.try_wait()? {
+                    break (status.success(), false);
+                }
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break (false, true);
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+    };
+    let join = |h: Option<std::thread::JoinHandle<Vec<u8>>>| {
+        h.and_then(|h| h.join().ok()).unwrap_or_default()
+    };
+    let mut text = String::from_utf8_lossy(&join(out)).into_owned();
+    text.push_str(&String::from_utf8_lossy(&join(err)));
+    Ok((success, text, timed_out))
+}
+
+fn run_one(bin: &TestBinary, name: &str, timeout: Option<Duration>) -> Outcome {
+    let start = Instant::now();
+    let mut cmd = Command::new(&bin.exe);
+    cmd.args(["--exact", name, "--nocapture", "--test-threads=1"])
+        .current_dir(&bin.package_dir)
+        .env("CARGO_MANIFEST_DIR", &bin.package_dir);
+    let (passed, mut output, timed_out) = match run_captured(&mut cmd, timeout) {
+        Ok(r) => r,
+        Err(e) => (false, e.to_string(), false),
+    };
+    if timed_out {
+        output
+            .push_str(
+                &format!(
+                    "\ntest timed out after {:?} and was killed\n",
+                    timeout.unwrap_or_default(),
+                ),
+            );
+    }
     Outcome {
         label: bin.label.clone(),
         name: name.to_string(),
         passed,
-        duration,
+        duration: start.elapsed(),
         output,
+        timed_out,
+        ..Default::default()
     }
 }
+
 pub struct Summary {
     pub outcomes: Vec<Outcome>,
     /// Tests skipped because they passed before against an identical binary.
@@ -148,10 +211,13 @@ pub fn run(
     root: &Path,
     bins: &[TestBinary],
     filter: Option<&str>,
-    use_cache: bool,
-    shared: bool,
+    opts: &Options,
     on_done: impl Fn(&Outcome) + Sync,
 ) -> Result<Summary> {
+    let (use_cache, shared) = (opts.cached, opts.shared);
+    if shared && opts.timeout.is_some() {
+        bail!("--timeout needs one process per test; drop --shared");
+    }
     let timings = std::env::var_os("SPARK_TIMINGS").is_some();
     let t_list = Instant::now();
     let mut cache = if use_cache { load_cache(root) } else { PassCache::new() };
@@ -161,7 +227,9 @@ pub fn run(
         .map(|b| {
             let key = if use_cache {
                 format!(
-                    "{}:{}", b.label, blake3::hash(& std::fs::read(& b.exe) ?).to_hex()
+                    "{}:{}",
+                    b.label,
+                    blake3::hash(&std::fs::read(&b.exe)?).to_hex(),
                 )
             } else {
                 String::new()
@@ -195,14 +263,15 @@ pub fn run(
         let to_run: usize = plan.iter().map(|p| p.2.len()).sum();
         let hashed = if use_cache { "+hash" } else { "" };
         eprintln!(
-            "spark timing: list{hashed} {:?} ({to_run} tests to run)", t_list.elapsed()
+            "spark timing: list{hashed} {:?} ({to_run} tests to run)",
+            t_list.elapsed(),
         );
     }
     let outcomes: Vec<(String, Outcome)> = if shared {
         // one process per binary, libtest schedules the tests on its own threads
         plan.par_iter()
             .flat_map(|(b, key, tests, all)| {
-                let outs = run_shared(b, tests, *all);
+                let outs = run_shared(b, tests, *all, opts.timeout);
                 outs.into_iter()
                     .map(|o| {
                         on_done(&o);
@@ -218,12 +287,45 @@ pub fn run(
             .collect();
         jobs.par_iter()
             .map(|(b, key, t)| {
-                let o = run_one(b, t);
+                let o = run_one(b, t, opts.timeout);
                 on_done(&o);
                 ((*key).clone(), o)
             })
             .collect()
     };
+    let mut outcomes = outcomes;
+    if opts.retries > 0 {
+        // re-run failures in isolation; a later pass makes the test "flaky" rather than failed
+        let mut by_name: HashMap<(&str, &str), &TestBinary> = HashMap::new();
+        for (bin, _, tests, _) in &plan {
+            for t in tests {
+                by_name.insert((bin.label.as_str(), t.as_str()), bin);
+            }
+        }
+        outcomes
+            .par_iter_mut()
+            .for_each(|(_, o)| {
+                if o.passed {
+                    return;
+                }
+                let Some(bin) = by_name.get(&(o.label.as_str(), o.name.as_str())) else {
+                    return
+                };
+                for attempt in 1..=opts.retries {
+                    let r = run_one(bin, &o.name, opts.timeout);
+                    if r.passed {
+                        o.passed = true;
+                        o.flaky = true;
+                        o.retries_used = attempt;
+                        o.output = String::new();
+                        return;
+                    }
+                    o.retries_used = attempt;
+                    o.output = r.output;
+                    o.timed_out = r.timed_out;
+                }
+            });
+    }
     if timings {
         eprintln!("spark timing: run {:?}", t_run.elapsed());
     }
@@ -248,13 +350,18 @@ pub fn run(
 }
 
 /// Run all `tests` of one binary in a single process (libtest's own thread pool).
-fn run_shared(bin: &TestBinary, tests: &[String], all: bool) -> Vec<Outcome> {
+fn run_shared(
+    bin: &TestBinary,
+    tests: &[String],
+    all: bool,
+    timeout: Option<Duration>,
+) -> Vec<Outcome> {
     let mut cmd = Command::new(&bin.exe);
     cmd.current_dir(&bin.package_dir).env("CARGO_MANIFEST_DIR", &bin.package_dir);
     if !all {
         // explicit names beat a substring filter; huge lists fall back to the whole binary
         if tests.len() > 20_000 {
-            return tests.iter().map(|t| run_one(bin, t)).collect();
+            return tests.iter().map(|t| run_one(bin, t, timeout)).collect();
         }
         cmd.arg("--exact").args(tests);
     }
@@ -264,8 +371,9 @@ fn run_shared(bin: &TestBinary, tests: &[String], all: bool) -> Vec<Outcome> {
     let text = match &res {
         Ok(o) => {
             format!(
-                "{}{}", String::from_utf8_lossy(& o.stdout), String::from_utf8_lossy(& o
-                .stderr)
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr),
             )
         }
         Err(e) => e.to_string(),
@@ -277,9 +385,9 @@ fn run_shared(bin: &TestBinary, tests: &[String], all: bool) -> Vec<Outcome> {
             outs.push(Outcome {
                 label: bin.label.clone(),
                 name: t.clone(),
-                passed: false,
                 duration: elapsed,
                 output: format!("no result reported; binary output:\n{text}"),
+                ..Default::default()
             });
         }
     }
@@ -323,9 +431,89 @@ pub fn parse_pretty(text: &str, label: &str) -> Vec<Outcome> {
                 } else {
                     blocks.get(name).cloned().unwrap_or_default()
                 },
+                ..Default::default()
             })
         })
         .collect()
+}
+
+fn xml_escape(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => o.push_str("&amp;"),
+            '<' => o.push_str("&lt;"),
+            '>' => o.push_str("&gt;"),
+            '"' => o.push_str("&quot;"),
+            // XML 1.0 cannot carry most control characters
+            c if (c as u32) < 0x20 && !matches!(c, '\n' | '\r' | '\t') => {}
+            c => o.push(c),
+        }
+    }
+    o
+}
+
+/// JUnit XML for CI systems: one `testsuite` per test binary.
+pub fn junit_xml(outcomes: &[Outcome]) -> String {
+    let mut suites: std::collections::BTreeMap<&str, Vec<&Outcome>> = std::collections::BTreeMap::new();
+    for o in outcomes {
+        suites.entry(o.label.as_str()).or_default().push(o);
+    }
+    let mut x = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuites>\n",
+    );
+    for (label, tests) in suites {
+        let failures = tests.iter().filter(|o| !o.passed).count();
+        let time: f64 = tests.iter().map(|o| o.duration.as_secs_f64()).sum();
+        x.push_str(
+            &format!(
+                "  <testsuite name=\"{}\" tests=\"{}\" failures=\"{failures}\" time=\"{time:.3}\">\n",
+                xml_escape(label),
+                tests.len(),
+            ),
+        );
+        for o in tests {
+            x.push_str(
+                &format!(
+                    "    <testcase classname=\"{}\" name=\"{}\" time=\"{:.3}\"",
+                    xml_escape(label),
+                    xml_escape(&o.name),
+                    o.duration.as_secs_f64(),
+                ),
+            );
+            if o.passed && !o.flaky {
+                x.push_str("/>\n");
+            } else if o.passed {
+                x.push_str(
+                    &format!(
+                        ">\n      <system-out>flaky: passed after {} retr{}</system-out>\n    </testcase>\n",
+                        o.retries_used,
+                        if o.retries_used == 1 { "y" } else { "ies" },
+                    ),
+                );
+            } else {
+                let kind = if o.timed_out { "timeout" } else { "failure" };
+                x.push_str(
+                    &format!(
+                        ">\n      <failure type=\"{kind}\" message=\"test failed\">{}</failure>\n    </testcase>\n",
+                        xml_escape(&o.output),
+                    ),
+                );
+            }
+        }
+        x.push_str("  </testsuite>\n");
+    }
+    x.push_str("</testsuites>\n");
+    x
+}
+
+/// Run documentation tests through cargo (rustdoc builds and runs each one itself).
+/// Returns `(success, combined output)`.
+pub fn run_doc_tests(root: &Path) -> Result<(bool, String)> {
+    let mut cmd = Command::new("cargo");
+    cmd.args(["test", "--doc", "--workspace"]).current_dir(root);
+    let (ok, out, _) = run_captured(&mut cmd, None).context("running cargo test --doc")?;
+    Ok((ok, out))
 }
 
 #[cfg(test)]
@@ -337,7 +525,54 @@ mod tests {
         let r = parse_pretty(out, "bin");
         assert_eq!(r.len(), 2);
         assert!(r[0].passed && r[0].name == "a::ok");
-        assert!(! r[1].passed && r[1].output.contains("boom"));
+        assert!(!r[1].passed && r[1].output.contains("boom"));
+    }
+
+    #[test]
+    fn junit_output_is_valid_and_escaped() {
+        let outs = vec![
+            Outcome {
+                label: "a".into(),
+                name: "ok".into(),
+                passed: true,
+                duration: Duration::from_millis(5),
+                ..Default::default()
+            },
+            Outcome {
+                label: "a".into(),
+                name: "bad".into(),
+                duration: Duration::from_millis(7),
+                output: "x < y && \"z\"\u{1}".into(),
+                ..Default::default()
+            },
+            Outcome {
+                label: "a".into(),
+                name: "flaky".into(),
+                passed: true,
+                flaky: true,
+                retries_used: 2,
+                ..Default::default()
+            },
+        ];
+        let x = junit_xml(&outs);
+        assert!(x.contains("tests=\"3\" failures=\"1\""), "{x}");
+        assert!(x.contains("x &lt; y &amp;&amp; &quot;z&quot;</failure>"), "{x}");
+        assert!(x.contains("flaky: passed after 2 retries"));
+        assert!(!x.contains('\u{1}'));
+    }
+
+    #[test]
+    fn timeout_kills_a_runaway_process() {
+        let start = Instant::now();
+        let mut cmd = Command::new("sleep");
+        cmd.arg("5");
+        let (ok, _, timed_out) = run_captured(&mut cmd, Some(Duration::from_millis(100)))
+            .unwrap();
+        assert!(!ok && timed_out);
+        assert!(start.elapsed() < Duration::from_secs(2));
+        let (ok, out, timed_out) = run_captured(Command::new("echo").arg("hi"), None)
+            .unwrap();
+        assert!(ok && !timed_out && out.trim() == "hi");
     }
 
     #[test]

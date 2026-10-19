@@ -31,7 +31,7 @@ fn set(s: String) {
     RESULT.with(|r| *r.borrow_mut() = s);
 }
 
-/// Lint: result is JSON `[{"code","message","line","column"}, ...]`.
+/// Lint: result is JSON `[{"code","message","line","column","fix","safe"}, ...]`.
 #[unsafe(no_mangle)]
 pub extern "C" fn lint(ptr: *const u8, len: usize) {
     let diags = blaze_ember::lint_source(input(ptr, len));
@@ -39,8 +39,46 @@ pub extern "C" fn lint(ptr: *const u8, len: usize) {
         .iter()
         .map(|d| {
             format!(
-                "{{\"code\":\"{}\",\"message\":{:?},\"line\":{},\"column\":{}}}", d.code,
-                d.message, d.line, d.column
+                "{{\"code\":\"{}\",\"message\":{:?},\"line\":{},\"column\":{},\"fix\":{},\"safe\":{}}}",
+                d.code,
+                d.message,
+                d.line,
+                d.column,
+                d.fix.is_some(),
+                d.safe,
+            )
+        })
+        .collect();
+    set(format!("[{}]", items.join(",")));
+}
+
+/// Apply ember's fixes: result is `{"output":..., "applied":n}`. `unsafe_fixes` != 0 also applies
+/// the fixes that depend on types.
+#[unsafe(no_mangle)]
+pub extern "C" fn fix(ptr: *const u8, len: usize, unsafe_fixes: u32) {
+    let sel = blaze_ember::Selection::default_rules();
+    let (out, applied, _) = blaze_ember::fix_source(
+        input(ptr, len),
+        &sel,
+        unsafe_fixes != 0,
+    );
+    set(format!("{{\"output\":{out:?},\"applied\":{applied}}}"));
+}
+
+/// All lint rules: `[{"code","name","summary","default","fixable","unsafe"}, ...]`.
+#[unsafe(no_mangle)]
+pub extern "C" fn rules() {
+    let items: Vec<String> = blaze_ember::RULES
+        .iter()
+        .map(|r| {
+            format!(
+                "{{\"code\":\"{}\",\"name\":\"{}\",\"summary\":{:?},\"default\":{},\"fixable\":{},\"unsafe\":{}}}",
+                r.code,
+                r.name,
+                r.summary,
+                r.default_on,
+                r.fixable,
+                blaze_ember::UNSAFE_FIXES.contains(&r.code),
             )
         })
         .collect();
